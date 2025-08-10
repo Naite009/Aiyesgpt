@@ -40,3 +40,22 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     </ToastProvider>
   </React.StrictMode>
 );
+import ErrorBoundary from "./components/ErrorBoundary";
+// ...
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <ToastProvider>
+        <RouterProvider router={router} />
+      </ToastProvider>
+    </ErrorBoundary>
+  </React.StrictMode>
+);
+import { Analytics } from "@vercel/analytics/react";
+// ...
+<ErrorBoundary>
+  <ToastProvider>
+    <RouterProvider router={router} />
+    <Analytics /> {/* tracks page views, web vitals */}
+  </ToastProvider>
+</ErrorBoundary>

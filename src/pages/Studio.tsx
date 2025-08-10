@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import { useToast } from "@/components/ToastProvider";
 import { supabase } from "@/lib/supabase";
 import { v4 as uuidv4 } from "uuid";
+import { Link } from "react-router-dom";
 
 export default function Studio() {
   const cap = useScreenCapture();
@@ -12,9 +13,9 @@ export default function Studio() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Attach blob to video preview when it changes
   useEffect(() => {
     if (!videoRef.current) return;
     if (!cap.blob) {
@@ -24,38 +25,16 @@ export default function Studio() {
     }
     const url = URL.createObjectURL(cap.blob);
     videoRef.current.src = url;
-    videoRef.current.onloadeddata = () => {
-      videoRef.current?.play().catch(() => {});
-    };
+    videoRef.current.onloadeddata = () => videoRef.current?.play().catch(() => {});
     return () => URL.revokeObjectURL(url);
   }, [cap.blob]);
-
-  const durationSec = useMemo(async () => {
-    if (!cap.blob) return 0;
-    try {
-      const tmpVideo = document.createElement("video");
-      tmpVideo.src = URL.createObjectURL(cap.blob);
-      await tmpVideo.play().catch(() => {});
-      const dur = tmpVideo.duration;
-      URL.revokeObjectURL(tmpVideo.src);
-      return Number.isFinite(dur) ? Math.round(dur) : 0;
-    } catch {
-      return 0;
-    }
-  }, [cap.blob]) as unknown as number; // acceptable approximation (we recompute on save too)
 
   async function extractThumbnail(blob: Blob): Promise<Blob> {
     return new Promise((resolve, reject) => {
       const v = document.createElement("video");
       const url = URL.createObjectURL(blob);
-      v.src = url;
-      v.muted = true;
-      v.playsInline = true;
-      v.onloadeddata = async () => {
-        try {
-          v.currentTime = Math.min(0.25, (v.duration || 1) * 0.05);
-        } catch {}
-      };
+      v.src = url; v.muted = true; v.playsInline = true;
+      v.onloadeddata = () => { try { v.currentTime = Math.min(0.25, (v.duration || 1) * 0.05); } catch {} };
       v.onseeked = () => {
         const canvas = document.createElement("canvas");
         canvas.width = 640;
@@ -89,69 +68,47 @@ export default function Studio() {
 
   async function onSave() {
     try {
-      if (!cap.blob) {
-        notify({ tone: "error", message: "Record something first." });
-        return;
-      }
+      setJustSaved(false);
+      if (!cap.blob) return notify({ tone: "error", message: "Record something first." });
+
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        notify({ tone: "error", message: "Please sign in first." });
-        return;
-      }
-      if (!title.trim()) {
-        notify({ tone: "error", message: "Please enter a title." });
-        return;
-      }
+      if (!user) return notify({ tone: "error", message: "Please sign in first." });
+      if (!title.trim()) return notify({ tone: "error", message: "Please enter a title." });
 
       setSaving(true);
 
-      // Ensure bucket exists: create a bucket named "lessons" in Supabase Storage (once)
       const fileId = uuidv4();
       const videoPath = `${user.id}/${fileId}.webm`;
       const thumbPath = `${user.id}/${fileId}.png`;
 
-      // Upload video
-      const { error: upErr } = await supabase
-        .storage
-        .from("lessons")
+      const { error: upErr } = await supabase.storage.from("lessons")
         .upload(videoPath, cap.blob, { contentType: cap.blob.type || "video/webm", upsert: false });
-
       if (upErr) throw upErr;
 
-      // Thumbnail
       const thumb = await extractThumbnail(cap.blob);
-      const { error: thErr } = await supabase
-        .storage
-        .from("lessons")
+      const { error: thErr } = await supabase.storage.from("lessons")
         .upload(thumbPath, thumb, { contentType: "image/png", upsert: false });
-
       if (thErr) throw thErr;
 
-      // Public URLs (make the bucket public, or switch to signed URLs)
-      const { data: vpub } = supabase.storage.from("lessons").getPublicUrl(videoPath);
-      const { data: tpub } = supabase.storage.from("lessons").getPublicUrl(thumbPath);
-      const video_url = vpub.publicUrl;
-      const thumbnail_url = tpub.publicUrl;
-
-      // Duration
       const duration = await getAccurateDuration(cap.blob);
 
-      // Insert row
       const { error: dbErr } = await supabase.from("lessons").insert({
         title: title.trim(),
         description: description.trim() || null,
         duration,
-        video_url,
-        thumbnail_url,
+        video_path: videoPath,
+        thumbnail_path: thumbPath,
+        video_url: null,
+        thumbnail_url: null,
         created_by: user.id,
         instruction_id: null,
       });
       if (dbErr) throw dbErr;
 
-      notify({ tone: "success", title: "Saved", message: "Lesson uploaded." });
+      notify({ tone: "success", title: "Saved", message: "Lesson uploaded (private). View it in Lessons." });
       cap.reset();
-      setTitle("");
-      setDescription("");
+      setTitle(""); setDescription("");
+      setJustSaved(true);
     } catch (e: any) {
       console.error("[studio] save error", e);
       notify({ tone: "error", title: "Save failed", message: e.message ?? "Unknown error" });
@@ -167,60 +124,32 @@ export default function Studio() {
       <div className="card p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <label className={`btn ${mode === "screen" ? "btn-primary" : "btn-outline"}`}>
-            <input
-              type="radio"
-              className="hidden"
-              checked={mode === "screen"}
-              onChange={() => setMode("screen")}
-            />
+            <input type="radio" className="hidden" checked={mode === "screen"} onChange={() => setMode("screen")} />
             Screen
           </label>
           <label className={`btn ${mode === "camera" ? "btn-primary" : "btn-outline"}`}>
-            <input
-              type="radio"
-              className="hidden"
-              checked={mode === "camera"}
-              onChange={() => setMode("camera")}
-            />
+            <input type="radio" className="hidden" checked={mode === "camera"} onChange={() => setMode("camera")} />
             Camera
           </label>
 
           {!cap.recording ? (
-            <button className="btn btn-primary" onClick={() => cap.start(mode)}>
-              Start recording
-            </button>
+            <button className="btn btn-primary" onClick={() => cap.start(mode)}>Start recording</button>
           ) : (
-            <button className="btn btn-outline" onClick={cap.stop}>
-              Stop & preview
-            </button>
+            <button className="btn btn-outline" onClick={cap.stop}>Stop & preview</button>
           )}
 
-          {cap.blob && (
-            <button className="btn btn-outline" onClick={cap.reset}>
-              Discard
-            </button>
-          )}
+          {cap.blob && <button className="btn btn-outline" onClick={cap.reset}>Discard</button>}
+          <Link to="/lessons" className="btn btn-outline">Go to Lessons</Link>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1">
             <span className="text-sm text-white/70">Lesson title *</span>
-            <input
-              className="input"
-              placeholder="e.g., Paste API key into .env"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
+            <input className="input" placeholder="e.g., Paste API key into .env" value={title} onChange={(e) => setTitle(e.target.value)} />
           </label>
-
           <label className="grid gap-1">
             <span className="text-sm text-white/70">Description</span>
-            <input
-              className="input"
-              placeholder="What this lesson covers"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
+            <input className="input" placeholder="What this lesson covers" value={description} onChange={(e) => setDescription(e.target.value)} />
           </label>
         </div>
 
@@ -234,21 +163,19 @@ export default function Studio() {
             {saving ? "Saving…" : "Save lesson"}
           </button>
           {cap.blob && (
-            <a
-              className="btn btn-outline"
-              href={URL.createObjectURL(cap.blob)}
-              download={`${(title || "lesson").replace(/\s+/g, "_")}.webm`}
-            >
+            <a className="btn btn-outline" href={URL.createObjectURL(cap.blob)} download={`${(title || "lesson").replace(/\s+/g, "_")}.webm`}>
               Download
             </a>
+          )}
+          {justSaved && (
+            <Link to="/lessons" className="btn btn-primary">View in Lessons</Link>
           )}
         </div>
       </div>
 
       <div className="text-sm text-white/60">
         Tip: choose <b>Screen</b> to record code walkthroughs (e.g., highlight <code>PUT_API_KEY_HERE</code>,
-        paste your key, save). Later we can attach this lesson to an instruction and auto-generate a
-        “practical” test that nudges learners with TTS.
+        paste your key, save). Later we can attach this lesson to an instruction and nudge learners with TTS.
       </div>
     </div>
   );
