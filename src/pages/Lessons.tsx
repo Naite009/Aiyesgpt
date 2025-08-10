@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ToastProvider";
 import { useSession } from "@/hooks/useSession";
@@ -17,6 +18,8 @@ type LessonRow = {
   created_at: string;
 };
 
+type InstructionMin = { id: string; title: string };
+
 const PAGE_SIZE = 12;
 
 export default function Lessons() {
@@ -28,6 +31,7 @@ export default function Lessons() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState<number>(0);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [insTitles, setInsTitles] = useState<Record<string, string>>({});
 
   const pageCount = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
@@ -48,8 +52,6 @@ export default function Lessons() {
 
   function extractPathFromPublicUrl(url?: string | null): string | null {
     if (!url) return null;
-    // Works for URLs like:
-    // https://<ref>.supabase.co/storage/v1/object/public/lessons/<user>/<file>.ext
     const i = url.indexOf("/object/public/lessons/");
     if (i === -1) return null;
     return url.slice(i + "/object/public/lessons/".length);
@@ -75,7 +77,7 @@ export default function Lessons() {
 
     const raw = (data ?? []) as LessonRow[];
 
-    // Prefer private paths; else derive from legacy URLs and sign those.
+    // Sign URLs
     const signed = await Promise.all(raw.map(async (r) => {
       const vPath = r.video_path ?? extractPathFromPublicUrl(r.video_url);
       const tPath = r.thumbnail_path ?? extractPathFromPublicUrl(r.thumbnail_url);
@@ -86,6 +88,20 @@ export default function Lessons() {
 
     setRows(signed);
     setLoading(false);
+
+    // Load titles for any attached instruction_ids
+    const ids = Array.from(new Set(signed.map(r => r.instruction_id).filter(Boolean))) as string[];
+    if (ids.length) {
+      const { data: ins, error: e2 } = await supabase
+        .from("instructions")
+        .select("id,title")
+        .in("id", ids);
+      if (!e2 && ins) {
+        const map: Record<string, string> = {};
+        (ins as InstructionMin[]).forEach(i => { map[i.id] = i.title; });
+        setInsTitles(map);
+      }
+    }
   }
 
   useEffect(() => {
@@ -103,7 +119,6 @@ export default function Lessons() {
     try {
       const row = rows.find(r => r.id === id);
       const toRemove: string[] = [];
-      // Remove by private paths when present; else try to derive from legacy URL.
       const vPath = row?.video_path ?? extractPathFromPublicUrl(row?.video_url ?? undefined);
       const tPath = row?.thumbnail_path ?? extractPathFromPublicUrl(row?.thumbnail_url ?? undefined);
       if (vPath) toRemove.push(vPath);
@@ -141,27 +156,29 @@ export default function Lessons() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {rows.map((r) => {
             const mine = user?.id && r.created_by === user.id;
+            const attachedTitle = r.instruction_id ? insTitles[r.instruction_id] : undefined;
+
             return (
               <div key={r.id} className="card p-3 flex flex-col gap-3">
                 <div className="relative">
-                  {playing === r.id && r.video_url ? (
-                    <video
-                      src={r.video_url}
-                      controls
-                      autoPlay
-                      className="w-full aspect-video rounded-lg bg-black"
-                      onEnded={() => setPlaying(null)}
-                    />
-                  ) : (
-                    <button className="w-full" onClick={() => setPlaying(r.id)} title="Play preview">
+                  {/* Click thumbnail to play inline */}
+                  <button className="w-full" onClick={() => setPlaying((p) => (p === r.id ? null : r.id))} title="Play preview">
+                    {playing === r.id && r.video_url ? (
+                      <video
+                        src={r.video_url}
+                        controls
+                        autoPlay
+                        className="w-full aspect-video rounded-lg bg-black"
+                      />
+                    ) : (
                       <img
                         src={r.thumbnail_url ?? ""}
                         alt={r.title}
                         className="w-full aspect-video rounded-lg object-cover bg-black"
                         onError={(e) => ((e.target as HTMLImageElement).style.opacity = "0.4")}
                       />
-                    </button>
-                  )}
+                    )}
+                  </button>
                 </div>
 
                 <div className="min-w-0">
@@ -170,13 +187,25 @@ export default function Lessons() {
                     {r.duration ? <span className="badge">{formatDuration(r.duration)}</span> : null}
                   </div>
                   {r.description && <div className="text-xs text-white/70 line-clamp-2">{r.description}</div>}
+                  {attachedTitle && (
+                    <div className="text-xs text-white/70 mt-1">
+                      Linked to instruction: <span className="opacity-90">{attachedTitle}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-auto flex flex-wrap gap-2">
+                  {/* Open raw URL in a new tab */}
                   {r.video_url && (
                     <a className="btn btn-outline" href={r.video_url} target="_blank" rel="noreferrer">
                       Open
                     </a>
+                  )}
+                  {/* NEW: Try This navigates to Guided for attached instruction */}
+                  {r.instruction_id && (
+                    <Link className="btn btn-primary" to={`/guided/${r.instruction_id}`}>
+                      Try This
+                    </Link>
                   )}
                   {mine && (
                     <button className="btn btn-outline" onClick={() => onDelete(r.id)}>

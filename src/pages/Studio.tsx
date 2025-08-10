@@ -5,6 +5,14 @@ import { useScreenCapture } from "@/hooks/useScreenCapture";
 import { useToast } from "@/components/ToastProvider";
 import { supabase } from "@/lib/supabase";
 
+type InstructionRow = {
+  id: string;
+  title: string;
+  created_by: string | null;
+  is_public: boolean;
+  created_at: string;
+};
+
 export default function Studio() {
   const cap = useScreenCapture();
   const { notify } = useToast();
@@ -14,6 +22,11 @@ export default function Studio() {
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
+
+  // NEW: attach to instruction
+  const [myInstructions, setMyInstructions] = useState<InstructionRow[]>([]);
+  const [attachTo, setAttachTo] = useState<string>(""); // instruction_id or ""
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Preview the recorded blob
@@ -29,6 +42,28 @@ export default function Studio() {
     videoRef.current.onloadeddata = () => videoRef.current?.play().catch(() => {});
     return () => URL.revokeObjectURL(url);
   }, [cap.blob]);
+
+  // Load the current user's instructions for the dropdown
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return setMyInstructions([]);
+      const { data, error } = await supabase
+        .from("instructions")
+        .select("id,title,created_by,is_public,created_at")
+        .or(`is_public.eq.true,created_by.eq.${user.id}`) // show your own + public
+        .order("created_at", { ascending: false })
+        .limit(1000);
+      if (!active) return;
+      if (error) {
+        console.error("[studio] load instructions error", error);
+        return;
+      }
+      setMyInstructions((data ?? []) as InstructionRow[]);
+    })();
+    return () => { active = false; };
+  }, []);
 
   // Thumbnail from first frame
   async function extractThumbnail(blob: Blob): Promise<Blob> {
@@ -98,7 +133,7 @@ export default function Studio() {
       // Duration
       const duration = await getAccurateDuration(cap.blob);
 
-      // Insert DB row (store PATHS, not public URLs)
+      // Insert DB row (store PATHS + optional instruction attachment)
       const { error: dbErr } = await supabase.from("lessons").insert({
         title: title.trim(),
         description: description.trim() || null,
@@ -108,11 +143,15 @@ export default function Studio() {
         video_url: null,        // legacy fields unused now
         thumbnail_url: null,
         created_by: user.id,
-        instruction_id: null,
+        instruction_id: attachTo || null,
       });
       if (dbErr) throw dbErr;
 
-      notify({ tone: "success", title: "Saved", message: "Lesson uploaded (private). View it in Lessons." });
+      notify({
+        tone: "success",
+        title: "Saved",
+        message: attachTo ? "Lesson uploaded and linked. View it in Lessons or try the instruction." : "Lesson uploaded (private). View it in Lessons.",
+      });
       cap.reset();
       setTitle(""); setDescription("");
       setJustSaved(true);
@@ -152,7 +191,7 @@ export default function Studio() {
           <Link to="/lessons" className="btn btn-outline">Go to Lessons</Link>
         </div>
 
-        {/* Metadata */}
+        {/* Metadata + Attach */}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1">
             <span className="text-sm text-white/70">Lesson title *</span>
@@ -163,7 +202,24 @@ export default function Studio() {
               onChange={(e) => setTitle(e.target.value)}
             />
           </label>
+
           <label className="grid gap-1">
+            <span className="text-sm text-white/70">Attach to Instruction (optional)</span>
+            <select
+              className="input"
+              value={attachTo}
+              onChange={(e) => setAttachTo(e.target.value)}
+            >
+              <option value="">— None —</option>
+              {myInstructions.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.title}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="grid gap-1 sm:col-span-2">
             <span className="text-sm text-white/70">Description</span>
             <input
               className="input"
@@ -195,14 +251,17 @@ export default function Studio() {
             </a>
           )}
           {justSaved && (
-            <Link to="/lessons" className="btn btn-primary">View in Lessons</Link>
+            <>
+              <Link to="/lessons" className="btn btn-primary">View in Lessons</Link>
+              {attachTo && <Link to={`/guided/${attachTo}`} className="btn btn-outline">Try Attached Instruction</Link>}
+            </>
           )}
         </div>
       </div>
 
       <div className="text-sm text-white/60">
         Tip: choose <b>Screen</b> to record code walkthroughs (e.g., highlight <code>PUT_API_KEY_HERE</code>,
-        paste your key, save). Later we can attach this lesson to an instruction and nudge learners with TTS.
+        paste your key, save). Attach it to an instruction so learners can click <b>Try This</b> from the Lessons page.
       </div>
     </div>
   );
