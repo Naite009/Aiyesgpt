@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { v4 as uuidv4 } from "uuid";
 import { useScreenCapture } from "@/hooks/useScreenCapture";
 import { useToast } from "@/components/ToastProvider";
 import { supabase } from "@/lib/supabase";
-import { v4 as uuidv4 } from "uuid";
-import { Link } from "react-router-dom";
 
 export default function Studio() {
   const cap = useScreenCapture();
@@ -16,6 +16,7 @@ export default function Studio() {
   const [justSaved, setJustSaved] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  // Preview the recorded blob
   useEffect(() => {
     if (!videoRef.current) return;
     if (!cap.blob) {
@@ -29,6 +30,7 @@ export default function Studio() {
     return () => URL.revokeObjectURL(url);
   }, [cap.blob]);
 
+  // Thumbnail from first frame
   async function extractThumbnail(blob: Blob): Promise<Blob> {
     return new Promise((resolve, reject) => {
       const v = document.createElement("video");
@@ -77,28 +79,33 @@ export default function Studio() {
 
       setSaving(true);
 
+      // Build private storage paths
       const fileId = uuidv4();
       const videoPath = `${user.id}/${fileId}.webm`;
       const thumbPath = `${user.id}/${fileId}.png`;
 
+      // Upload video (PRIVATE bucket)
       const { error: upErr } = await supabase.storage.from("lessons")
         .upload(videoPath, cap.blob, { contentType: cap.blob.type || "video/webm", upsert: false });
       if (upErr) throw upErr;
 
+      // Upload thumbnail
       const thumb = await extractThumbnail(cap.blob);
       const { error: thErr } = await supabase.storage.from("lessons")
         .upload(thumbPath, thumb, { contentType: "image/png", upsert: false });
       if (thErr) throw thErr;
 
+      // Duration
       const duration = await getAccurateDuration(cap.blob);
 
+      // Insert DB row (store PATHS, not public URLs)
       const { error: dbErr } = await supabase.from("lessons").insert({
         title: title.trim(),
         description: description.trim() || null,
         duration,
         video_path: videoPath,
         thumbnail_path: thumbPath,
-        video_url: null,
+        video_url: null,        // legacy fields unused now
         thumbnail_url: null,
         created_by: user.id,
         instruction_id: null,
@@ -122,6 +129,7 @@ export default function Studio() {
       <h1 className="text-2xl font-semibold">Lesson Studio</h1>
 
       <div className="card p-4 space-y-3">
+        {/* Controls row (includes Go to Lessons) */}
         <div className="flex flex-wrap items-center gap-2">
           <label className={`btn ${mode === "screen" ? "btn-primary" : "btn-outline"}`}>
             <input type="radio" className="hidden" checked={mode === "screen"} onChange={() => setMode("screen")} />
@@ -139,31 +147,50 @@ export default function Studio() {
           )}
 
           {cap.blob && <button className="btn btn-outline" onClick={cap.reset}>Discard</button>}
+
+          {/* Always-visible link */}
           <Link to="/lessons" className="btn btn-outline">Go to Lessons</Link>
         </div>
 
+        {/* Metadata */}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1">
             <span className="text-sm text-white/70">Lesson title *</span>
-            <input className="input" placeholder="e.g., Paste API key into .env" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <input
+              className="input"
+              placeholder="e.g., Paste API key into .env"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
           </label>
           <label className="grid gap-1">
             <span className="text-sm text-white/70">Description</span>
-            <input className="input" placeholder="What this lesson covers" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <input
+              className="input"
+              placeholder="What this lesson covers"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
           </label>
         </div>
 
+        {/* Preview */}
         <div className="grid gap-2">
           <div className="text-sm text-white/70">Preview</div>
           <video ref={videoRef} controls className="w-full rounded-xl bg-black aspect-video" />
         </div>
 
+        {/* Actions */}
         <div className="flex gap-2">
           <button className="btn btn-primary" onClick={onSave} disabled={saving || !cap.blob}>
             {saving ? "Saving…" : "Save lesson"}
           </button>
           {cap.blob && (
-            <a className="btn btn-outline" href={URL.createObjectURL(cap.blob)} download={`${(title || "lesson").replace(/\s+/g, "_")}.webm`}>
+            <a
+              className="btn btn-outline"
+              href={URL.createObjectURL(cap.blob)}
+              download={`${(title || "lesson").replace(/\s+/g, "_")}.webm`}
+            >
               Download
             </a>
           )}
