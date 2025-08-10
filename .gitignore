@@ -1,0 +1,10 @@
+# Node / Vite
+node_modules
+dist
+.vite
+.DS_Store
+
+# Local env files
+.env
+.env.local
+*.log

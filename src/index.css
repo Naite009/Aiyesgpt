@@ -1,0 +1,79 @@
+/* Base */
+:root {
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  background: #0b0f17;
+  color: #e8ecf1;
+}
+
+/* Simple utility-ish styles to match earlier components */
+.input {
+  width: 100%;
+  padding: .625rem .75rem;
+  border-radius: .75rem;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  color: inherit;
+  outline: none;
+}
+.input:focus { border-color: rgba(99, 102, 241, .6); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  padding: .5rem .9rem;
+  border-radius: .75rem;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,.08);
+  color: inherit;
+  cursor: pointer;
+  transition: filter .15s ease, background .15s ease, border-color .15s ease;
+}
+.btn:disabled { opacity: .6; cursor: not-allowed; }
+.btn:hover { filter: brightness(1.08); }
+.btn-primary {
+  background: linear-gradient(180deg, #6ea8ff, #4f46e5);
+  border-color: rgba(99,102,241,.5);
+  color: white;
+}
+.btn-outline {
+  background: rgba(255,255,255,.04);
+  border-color: rgba(255,255,255,.12);
+}
+.card {
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  border-radius: .9rem;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: .2rem .5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.06);
+  font-size: .75rem;
+}
+
+/* Spinner used in Guided verify button */
+.btn .spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Layout helpers */
+.min-h-dvh { min-height: 100dvh; }
+.backdrop-blur { backdrop-filter: blur(8px); }
