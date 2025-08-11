@@ -1,13 +1,16 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useEffect } from "react";
-import ThemeToggle from "./components/ThemeToggle";
 
 function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <NavLink
       to={to}
       className={({ isActive }) =>
-        `px-3 py-2 rounded-xl transition ${isActive ? "bg-white/10 text-white" : "text-white/80 hover:text-white hover:bg-white/5"}`
+        `px-3 py-2 rounded-xl transition ${
+          isActive
+            ? "bg-white/10 text-white"
+            : "text-white/80 hover:text-white hover:bg-white/5"
+        }`
       }
       end
     >
@@ -17,7 +20,6 @@ function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
 }
 
 export default function App() {
-  // Ensure body background matches theme
   useEffect(() => {
     document.body.classList.add("bg-app");
   }, []);
@@ -26,7 +28,9 @@ export default function App() {
     <div className="min-h-dvh flex flex-col">
       <header className="sticky top-0 z-30 backdrop-blur bg-black/40 border-b border-white/10">
         <div className="mx-auto max-w-6xl w-full px-4 h-14 flex items-center gap-3">
-          <Link to="/" className="font-semibold text-white mr-2">Aiyes</Link>
+          <Link to="/" className="font-semibold text-white mr-2">
+            Aiyes
+          </Link>
           <nav className="flex items-center gap-1">
             <NavItem to="/browse">Browse</NavItem>
             <NavItem to="/create">Create</NavItem>
@@ -34,9 +38,6 @@ export default function App() {
             <NavItem to="/lessons">Lessons</NavItem>
             <NavItem to="/favorites">Favorites</NavItem>
           </nav>
-          <div className="ml-auto flex items-center gap-2">
-            <ThemeToggle />
-          </div>
         </div>
       </header>
 
