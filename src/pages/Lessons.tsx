@@ -9,10 +9,10 @@ type LessonRow = {
   title: string;
   description: string | null;
   duration: number | null;
-  video_url: string | null;        // legacy (public)
-  thumbnail_url: string | null;    // legacy (public)
-  video_path: string | null;       // new (private)
-  thumbnail_path: string | null;   // new (private)
+  video_url: string | null;        // legacy public
+  thumbnail_url: string | null;    // legacy public
+  video_path: string | null;       // private
+  thumbnail_path: string | null;   // private
   created_by: string | null;
   instruction_id: string | null;
   created_at: string;
@@ -33,10 +33,18 @@ export default function Lessons() {
   const [playing, setPlaying] = useState<string | null>(null);
   const [insTitles, setInsTitles] = useState<Record<string, string>>({});
 
+  // filters
+  const [q, setQ] = useState("");
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [onlyWithInstruction, setOnlyWithInstruction] = useState(false);
+
   const pageCount = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
   async function loadCount() {
-    const { count } = await supabase.from("lessons").select("*", { count: "exact", head: true });
+    let query = supabase.from("lessons").select("*", { count: "exact", head: true });
+    if (onlyMine && user?.id) query = query.eq("created_by", user.id);
+    if (onlyWithInstruction) query = query.not("instruction_id", "is", null);
+    const { count } = await query;
     if (typeof count === "number") setTotal(count);
   }
 
@@ -61,12 +69,17 @@ export default function Lessons() {
     setLoading(true);
     const from = (p - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("lessons")
+
+    let query = supabase.from("lessons")
       .select("*")
       .order("created_at", { ascending: false })
       .range(from, to);
 
+    if (onlyMine && user?.id) query = query.eq("created_by", user.id);
+    if (onlyWithInstruction) query = query.not("instruction_id", "is", null);
+
+    // simple search by title/description (client-side after fetch to keep SQL simple)
+    const { data, error } = await query;
     if (error) {
       console.error("[lessons] load error", error);
       notify({ tone: "error", title: "Load failed", message: error.message });
@@ -75,7 +88,14 @@ export default function Lessons() {
       return;
     }
 
-    const raw = (data ?? []) as LessonRow[];
+    let raw = (data ?? []) as LessonRow[];
+    if (q.trim()) {
+      const needle = q.trim().toLowerCase();
+      raw = raw.filter(r =>
+        r.title?.toLowerCase().includes(needle) ||
+        (r.description ?? "").toLowerCase().includes(needle)
+      );
+    }
 
     // Sign URLs
     const signed = await Promise.all(raw.map(async (r) => {
@@ -92,10 +112,7 @@ export default function Lessons() {
     // Load titles for any attached instruction_ids
     const ids = Array.from(new Set(signed.map(r => r.instruction_id).filter(Boolean))) as string[];
     if (ids.length) {
-      const { data: ins, error: e2 } = await supabase
-        .from("instructions")
-        .select("id,title")
-        .in("id", ids);
+      const { data: ins, error: e2 } = await supabase.from("instructions").select("id,title").in("id", ids);
       if (!e2 && ins) {
         const map: Record<string, string> = {};
         (ins as InstructionMin[]).forEach(i => { map[i.id] = i.title; });
@@ -105,52 +122,47 @@ export default function Lessons() {
   }
 
   useEffect(() => {
-    loadCount().then(() => loadPage(1));
     setPage(1);
-  }, []);
+    loadCount().then(() => loadPage(1));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onlyMine, onlyWithInstruction]);
 
   useEffect(() => {
     loadPage(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
-
-  async function onDelete(id: string) {
-    if (!confirm("Delete this lesson? This cannot be undone.")) return;
-    try {
-      const row = rows.find(r => r.id === id);
-      const toRemove: string[] = [];
-      const vPath = row?.video_path ?? extractPathFromPublicUrl(row?.video_url ?? undefined);
-      const tPath = row?.thumbnail_path ?? extractPathFromPublicUrl(row?.thumbnail_url ?? undefined);
-      if (vPath) toRemove.push(vPath);
-      if (tPath) toRemove.push(tPath);
-      if (toRemove.length) await supabase.storage.from("lessons").remove(toRemove);
-
-      const { error } = await supabase.from("lessons").delete().eq("id", id);
-      if (error) throw error;
-
-      notify({ tone: "success", message: "Lesson deleted." });
-      await loadCount();
-      const newLastPage = Math.max(1, Math.ceil((total - 1) / PAGE_SIZE));
-      if (page > newLastPage) setPage(newLastPage);
-      else loadPage(page);
-    } catch (e: any) {
-      console.error("[lessons] delete error", e);
-      notify({ tone: "error", title: "Delete failed", message: e?.message ?? "Unknown error" });
-    }
-  }
+  }, [page, q]);
 
   return (
     <div className="grid gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Lessons</h1>
         <div className="text-sm text-white/60">{total} total · Page {page} / {pageCount}</div>
+      </div>
+
+      {/* Filters */}
+      <div className="card p-3 flex flex-wrap items-center gap-2">
+        <input
+          className="input flex-1 min-w-[220px]"
+          placeholder="Search lessons…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} />
+          Mine
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={onlyWithInstruction} onChange={(e) => setOnlyWithInstruction(e.target.checked)} />
+          Has instruction
+        </label>
+        <Link to="/studio" className="btn btn-outline ml-auto">Open Studio</Link>
       </div>
 
       {loading ? (
         <div className="card p-4">Loading…</div>
       ) : rows.length === 0 ? (
         <div className="card p-4 text-white/70">
-          No lessons yet. Go to <b>Studio</b>, record a screen/camera walkthrough, and click “Save lesson”.
+          No lessons found. Try clearing filters or create one in <b>Studio</b>.
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -161,15 +173,9 @@ export default function Lessons() {
             return (
               <div key={r.id} className="card p-3 flex flex-col gap-3">
                 <div className="relative">
-                  {/* Click thumbnail to play inline */}
                   <button className="w-full" onClick={() => setPlaying((p) => (p === r.id ? null : r.id))} title="Play preview">
                     {playing === r.id && r.video_url ? (
-                      <video
-                        src={r.video_url}
-                        controls
-                        autoPlay
-                        className="w-full aspect-video rounded-lg bg-black"
-                      />
+                      <video src={r.video_url} controls autoPlay className="w-full aspect-video rounded-lg bg-black" />
                     ) : (
                       <img
                         src={r.thumbnail_url ?? ""}
@@ -195,20 +201,25 @@ export default function Lessons() {
                 </div>
 
                 <div className="mt-auto flex flex-wrap gap-2">
-                  {/* Open raw URL in a new tab */}
                   {r.video_url && (
-                    <a className="btn btn-outline" href={r.video_url} target="_blank" rel="noreferrer">
-                      Open
-                    </a>
+                    <a className="btn btn-outline" href={r.video_url} target="_blank" rel="noreferrer">Open</a>
                   )}
-                  {/* NEW: Try This navigates to Guided for attached instruction */}
                   {r.instruction_id && (
-                    <Link className="btn btn-primary" to={`/guided/${r.instruction_id}`}>
-                      Try This
-                    </Link>
+                    <Link className="btn btn-primary" to={`/guided/${r.instruction_id}`}>Try This</Link>
                   )}
                   {mine && (
-                    <button className="btn btn-outline" onClick={() => onDelete(r.id)}>
+                    <button
+                      className="btn btn-outline"
+                      onClick={async () => {
+                        if (!confirm("Delete this lesson?")) return;
+                        const vPath = r.video_path ?? extractPathFromPublicUrl(r.video_url ?? undefined);
+                        const tPath = r.thumbnail_path ?? extractPathFromPublicUrl(r.thumbnail_url ?? undefined);
+                        if (vPath) await supabase.storage.from("lessons").remove([vPath]);
+                        if (tPath) await supabase.storage.from("lessons").remove([tPath]);
+                        await supabase.from("lessons").delete().eq("id", r.id);
+                        setRows(rows.filter(x => x.id !== r.id));
+                      }}
+                    >
                       Delete
                     </button>
                   )}

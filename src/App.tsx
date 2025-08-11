@@ -1,85 +1,52 @@
-import { Outlet, NavLink } from "react-router-dom";
-import {
-  BookMarked,
-  Camera,
-  CircleHelp,
-  FlameKindling,
-  Plus,
-  Search,
-  Sparkles,
-} from "lucide-react";
-import { useState } from "react";
-import AuthButton from "@/components/AuthButton";
+import { Link, NavLink, Outlet } from "react-router-dom";
+import { useEffect } from "react";
+import ThemeToggle from "./components/ThemeToggle";
 
-export default function App() {
-  const [dark, setDark] = useState<boolean>(true);
-
-  return (
-    <div className={dark ? "dark" : ""}>
-      <div className="min-h-dvh bg-background text-foreground">
-        <header className="sticky top-0 z-50 backdrop-blur supports-[backdrop-filter]:bg-black/30">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <Sparkles className="size-6 text-brand" />
-              <NavLink to="/" className="text-lg font-semibold">
-                Aiyes
-              </NavLink>
-            </div>
-
-            <nav className="hidden items-center gap-2 sm:flex">
-              <Tab to="/browse" label="Browse" icon={<Search className="size-4" />} />
-              <Tab to="/create" label="Create" icon={<Plus className="size-4" />} />
-              <Tab to="/studio" label="Studio" icon={<Camera className="size-4" />} />
-              <Tab to="/favorites" label="Favorites" icon={<BookMarked className="size-4" />} />
-            </nav>
-
-            <div className="flex items-center gap-2">
-              <button
-                className="btn btn-outline"
-                onClick={() => setDark((d: boolean) => !d)}
-                title="Toggle theme"
-              >
-                🌓
-              </button>
-              <AuthButton />
-              <button className="btn btn-primary" title="Help">
-                <CircleHelp className="mr-2 size-4" />
-                Help
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto max-w-6xl px-4 py-6">
-          <Outlet />
-        </main>
-
-        <footer className="border-t border-white/10 py-6 text-center text-sm text-white/60">
-          Built with <FlameKindling className="mx-1 inline size-4 text-brand" /> Aiyes
-        </footer>
-      </div>
-    </div>
-  );
-}
-
-function Tab({
-  to,
-  label,
-  icon,
-}: {
-  to: string;
-  label: string;
-  icon?: React.ReactNode;
-}) {
+function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <NavLink
       to={to}
       className={({ isActive }) =>
-        `btn btn-outline ${isActive ? "border-brand/60 bg-brand/10" : ""}`
+        `px-3 py-2 rounded-xl transition ${isActive ? "bg-white/10 text-white" : "text-white/80 hover:text-white hover:bg-white/5"}`
       }
+      end
     >
-      {icon}
-      <span className="ml-2 hidden sm:inline">{label}</span>
+      {children}
     </NavLink>
+  );
+}
+
+export default function App() {
+  // Ensure body background matches theme
+  useEffect(() => {
+    document.body.classList.add("bg-app");
+  }, []);
+
+  return (
+    <div className="min-h-dvh flex flex-col">
+      <header className="sticky top-0 z-30 backdrop-blur bg-black/40 border-b border-white/10">
+        <div className="mx-auto max-w-6xl w-full px-4 h-14 flex items-center gap-3">
+          <Link to="/" className="font-semibold text-white mr-2">Aiyes</Link>
+          <nav className="flex items-center gap-1">
+            <NavItem to="/browse">Browse</NavItem>
+            <NavItem to="/create">Create</NavItem>
+            <NavItem to="/studio">Studio</NavItem>
+            <NavItem to="/lessons">Lessons</NavItem>
+            <NavItem to="/favorites">Favorites</NavItem>
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-6xl w-full px-4 py-6 flex-1">
+        <Outlet />
+      </main>
+
+      <footer className="mx-auto max-w-6xl w-full px-4 py-6 text-sm text-white/50">
+        Aiyes · Build, watch, and verify steps with AI
+      </footer>
+    </div>
   );
 }
