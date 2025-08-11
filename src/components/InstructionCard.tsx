@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Bookmark } from "lucide-react";
 import { useBookmarks } from "@/hooks/useBookmarks";
 
-/** Local Instruction shape for convenience */
+/** Shape used when callers pass a single `instruction` prop */
 type Instruction = {
   id: string;
   title: string;
@@ -15,9 +15,7 @@ type Instruction = {
 };
 
 /**
- * Accepts either:
- *  A) individual props: id, title, category, tags, isPublic, preview
- *  B) a single { instruction } object (legacy callers)
+ * Accepts EITHER individual props OR a single `{ instruction }` (legacy).
  */
 export type InstructionCardProps =
   | {
@@ -30,7 +28,7 @@ export type InstructionCardProps =
       instruction?: never;
     }
   | {
-      instruction: Instruction;
+      instruction: Instruction; // <— allow legacy callers
       id?: never;
       title?: never;
       category?: never;
@@ -40,17 +38,17 @@ export type InstructionCardProps =
     };
 
 export default function InstructionCard(props: InstructionCardProps) {
-  // Normalize props
+  // Normalize props to a single object
   const i: Instruction =
-    "instruction" in props && props.instruction
+    "instruction" in props
       ? props.instruction
       : {
-          id: (props as any).id,
-          title: (props as any).title,
-          category: (props as any).category,
-          tags: (props as any).tags,
-          is_public: (props as any).isPublic,
-          content: (props as any).preview, // used only for short preview text
+          id: props.id,
+          title: props.title,
+          category: props.category,
+          tags: props.tags,
+          is_public: props.isPublic,
+          content: props.preview, // used only as preview text
         };
 
   const id = i.id;
@@ -59,9 +57,7 @@ export default function InstructionCard(props: InstructionCardProps) {
   const tags = i.tags ?? null;
   const isPublic = Boolean(i.is_public);
   const preview =
-    "instruction" in props && props.instruction
-      ? (i.content ?? "").slice(0, 160)
-      : ((props as any).preview as string | undefined);
+    "instruction" in props ? (i.content ?? "").slice(0, 160) : props.preview;
 
   const { isBookmarked, toggle } = useBookmarks();
 
