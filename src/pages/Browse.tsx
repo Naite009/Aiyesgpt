@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import InstructionCard from "@/components/InstructionCard";
+import { supabase } from "@/lib/supabase";
+
+const AnyInstructionCard = InstructionCard as any;
 
 type Instruction = {
   id: string;
@@ -17,7 +19,6 @@ export default function Browse() {
   const [rows, setRows] = useState<Instruction[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // filters
   const [q, setQ] = useState("");
   const [category, setCategory] = useState<string>("");
 
@@ -26,17 +27,16 @@ export default function Browse() {
     (async () => {
       setLoading(true);
 
-      // show public + mine if signed in; otherwise public only
       const { data: { user } } = await supabase.auth.getUser();
-      const q = supabase
+      const base = supabase
         .from("instructions")
         .select("id,title,content,category,tags,is_public,created_by,created_at")
         .order("created_at", { ascending: false })
         .limit(500);
 
       const { data, error } = user
-        ? await q.or(`is_public.eq.true,created_by.eq.${user.id}`)
-        : await q.eq("is_public", true);
+        ? await base.or(`is_public.eq.true,created_by.eq.${user.id}`)
+        : await base.eq("is_public", true);
 
       if (!mounted) return;
       if (error) {
@@ -66,7 +66,7 @@ export default function Browse() {
 
   const categories = useMemo(() => {
     const set = new Set<string>();
-    rows.forEach((r) => { if (r.category) set.add(r.category); });
+    rows.forEach((r) => r.category && set.add(r.category));
     return Array.from(set).sort();
   }, [rows]);
 
@@ -74,7 +74,6 @@ export default function Browse() {
     <div className="grid gap-4">
       <h1 className="text-2xl font-semibold">Browse Instructions</h1>
 
-      {/* Search / Filter */}
       <div className="card p-3 grid gap-3 sm:grid-cols-3">
         <input
           className="input sm:col-span-2"
@@ -82,15 +81,9 @@ export default function Browse() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <select
-          className="input"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        >
+        <select className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="">All categories</option>
-          {categories.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
+          {categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
 
@@ -101,7 +94,7 @@ export default function Browse() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((i) => (
-            <InstructionCard
+            <AnyInstructionCard
               key={i.id}
               id={i.id}
               title={i.title}

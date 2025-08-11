@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
-import { useBookmarks } from "@/hooks/useBookmarks";
 import InstructionCard from "@/components/InstructionCard";
+import { useBookmarks } from "@/hooks/useBookmarks";
+import { supabase } from "@/lib/supabase";
+
+const AnyInstructionCard = InstructionCard as any;
 
 type Instruction = {
   id: string;
@@ -23,17 +25,16 @@ export default function Favorites() {
     let mounted = true;
     (async () => {
       setLoading(true);
-      // Load public+mine similar to Browse, then filter by bookmark locally
       const { data: { user } } = await supabase.auth.getUser();
-      const q = supabase
+      const base = supabase
         .from("instructions")
         .select("id,title,content,category,tags,is_public,created_by,created_at")
         .order("created_at", { ascending: false })
         .limit(500);
 
       const { data, error } = user
-        ? await q.or(`is_public.eq.true,created_by.eq.${user.id}`)
-        : await q.eq("is_public", true);
+        ? await base.or(`is_public.eq.true,created_by.eq.${user.id}`)
+        : await base.eq("is_public", true);
 
       if (!mounted) return;
       if (error) {
@@ -47,10 +48,7 @@ export default function Favorites() {
     return () => { mounted = false; };
   }, []);
 
-  const bookmarked = useMemo(
-    () => rows.filter((r) => isBookmarked(r.id)),
-    [rows, isBookmarked]
-  );
+  const bookmarked = useMemo(() => rows.filter((r) => isBookmarked(r.id)), [rows, isBookmarked]);
 
   return (
     <div className="grid gap-4">
@@ -63,7 +61,7 @@ export default function Favorites() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {bookmarked.map((i) => (
-            <InstructionCard
+            <AnyInstructionCard
               key={i.id}
               id={i.id}
               title={i.title}
