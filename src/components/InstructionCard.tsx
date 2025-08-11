@@ -2,18 +2,67 @@ import { Link } from "react-router-dom";
 import { Bookmark } from "lucide-react";
 import { useBookmarks } from "@/hooks/useBookmarks";
 
-export type InstructionCardProps = {
+/** Local Instruction shape for convenience */
+type Instruction = {
   id: string;
   title: string;
+  content?: string;
   category?: string | null;
   tags?: string[] | null;
-  isPublic?: boolean;
-  preview?: string;
+  is_public?: boolean | null;
+  created_by?: string | null;
+  created_at?: string;
 };
 
-export default function InstructionCard({
-  id, title, category, tags, isPublic, preview,
-}: InstructionCardProps) {
+/**
+ * Accepts either:
+ *  A) individual props: id, title, category, tags, isPublic, preview
+ *  B) a single { instruction } object (legacy callers)
+ */
+export type InstructionCardProps =
+  | {
+      id: string;
+      title: string;
+      category?: string | null;
+      tags?: string[] | null;
+      isPublic?: boolean;
+      preview?: string;
+      instruction?: never;
+    }
+  | {
+      instruction: Instruction;
+      id?: never;
+      title?: never;
+      category?: never;
+      tags?: never;
+      isPublic?: never;
+      preview?: never;
+    };
+
+export default function InstructionCard(props: InstructionCardProps) {
+  // Normalize props
+  const i: Instruction =
+    "instruction" in props && props.instruction
+      ? props.instruction
+      : {
+          id: (props as any).id,
+          title: (props as any).title,
+          category: (props as any).category,
+          tags: (props as any).tags,
+          is_public: (props as any).isPublic,
+          content: (props as any).preview, // used only for short preview text
+        };
+
+  const id = i.id;
+  const title = i.title;
+  const category = i.category ?? null;
+  const tags = i.tags ?? null;
+  const isPublic = Boolean(i.is_public);
+  const preview =
+    "instruction" in props && props.instruction
+      ? (i.content ?? "").slice(0, 160)
+      : ((props as any).preview as string | undefined);
+
   const { isBookmarked, toggle } = useBookmarks();
 
   return (
@@ -41,7 +90,6 @@ export default function InstructionCard({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {/* FIXED: route to student path */}
         <Link to={`/student/guided/${id}`} className="btn btn-primary">Start Guided</Link>
         <Link to={`/student/test/${id}`} className="btn btn-outline">Start Test</Link>
       </div>
