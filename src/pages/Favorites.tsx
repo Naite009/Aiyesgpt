@@ -1,75 +1,77 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAppStore } from "@/store";
+import { supabase } from "@/lib/supabase";
 import { useBookmarks } from "@/hooks/useBookmarks";
 import InstructionCard from "@/components/InstructionCard";
-import { supabase } from "@/lib/supabase";
-import type { Instruction, DbInstructionRow } from "@/types";
-import { toInstruction } from "@/types";
+
+type Instruction = {
+  id: string;
+  title: string;
+  content: string;
+  category: string | null;
+  tags: string[] | null;
+  is_public: boolean | null;
+  created_by: string | null;
+  created_at: string;
+};
 
 export default function Favorites() {
-  const { instructions } = useAppStore();
-  const { ids: favIds } = useBookmarks();
-  const [extra, setExtra] = useState<Record<string, Instruction>>({}); // fetched favorites not already in store
-  const favList = useMemo(() => Array.from(favIds), [favIds]);
+  const [rows, setRows] = useState<Instruction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { isBookmarked } = useBookmarks();
 
-  // find favorites that are already in memory
-  const present: Instruction[] = useMemo(() => {
-    const map = new Map(instructions.map((i) => [i.id, i]));
-    return favList.map((id) => map.get(id)).filter(Boolean) as Instruction[];
-  }, [instructions, favList]);
-
-  // lookup any missing favorites from Supabase
   useEffect(() => {
-    const map = new Map(instructions.map((i) => [i.id, i]));
-    const missing = favList.filter((id) => !map.has(id) && !extra[id]);
-    if (missing.length === 0) return;
-
+    let mounted = true;
     (async () => {
-      const { data, error } = await supabase
+      setLoading(true);
+      // Load public+mine similar to Browse, then filter by bookmark locally
+      const { data: { user } } = await supabase.auth.getUser();
+      const q = supabase
         .from("instructions")
-        .select("*")
-        .in("id", missing);
+        .select("id,title,content,category,tags,is_public,created_by,created_at")
+        .order("created_at", { ascending: false })
+        .limit(500);
 
+      const { data, error } = user
+        ? await q.or(`is_public.eq.true,created_by.eq.${user.id}`)
+        : await q.eq("is_public", true);
+
+      if (!mounted) return;
       if (error) {
-        console.error("[favorites] fetch missing error:", error);
-        return;
+        console.error("[favorites] load error", error);
+        setRows([]);
+      } else {
+        setRows((data ?? []) as Instruction[]);
       }
-      const additions: Record<string, Instruction> = {};
-      (data as DbInstructionRow[] | null)?.forEach((row) => {
-        const ins = toInstruction(row);
-        additions[ins.id] = ins;
-      });
-      if (Object.keys(additions).length > 0) {
-        setExtra((prev) => ({ ...prev, ...additions }));
-      }
+      setLoading(false);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [favList.join(","), instructions]);
+    return () => { mounted = false; };
+  }, []);
 
-  const combined: Instruction[] = useMemo(() => {
-    const withExtras = [...present, ...Object.values(extra)];
-    // keep bookmark order, favorites first by original order of ids
-    const order = new Map(favList.map((id, idx) => [id, idx]));
-    return withExtras
-      .filter((i, idx, arr) => arr.findIndex((x) => x.id === i.id) === idx) // dedupe
-      .sort((a, b) => (order.get(a.id)! - order.get(b.id)!));
-  }, [present, extra, favList]);
+  const bookmarked = useMemo(
+    () => rows.filter((r) => isBookmarked(r.id)),
+    [rows, isBookmarked]
+  );
 
   return (
     <div className="grid gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Favorites</h1>
-        <div className="text-sm text-white/60">{combined.length} saved</div>
-      </div>
+      <h1 className="text-2xl font-semibold">Favorites</h1>
 
-      {combined.length === 0 ? (
-        <div className="card p-4 text-white/70">
-          You haven’t bookmarked anything yet. Go to Browse and hit “☆ Bookmark”.
-        </div>
+      {loading ? (
+        <div className="card p-4 text-white/60">Loading…</div>
+      ) : bookmarked.length === 0 ? (
+        <div className="card p-4 text-white/60">No favorites yet.</div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {combined.map((ins) => (
-            <InstructionCard key={ins.id} instruction={ins} />
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {bookmarked.map((i) => (
+            <InstructionCard
+              key={i.id}
+              id={i.id}
+              title={i.title}
+              category={i.category ?? undefined}
+              tags={i.tags ?? undefined}
+              isPublic={!!i.is_public}
+              preview={i.content?.slice(0, 160)}
+            />
           ))}
         </div>
       )}
