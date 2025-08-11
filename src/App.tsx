@@ -50,3 +50,4 @@ export default function App() {
   );
 }
 // build: 2025-08-11T21:14:05Z
+ · <span id="build">build: {import.meta.env?.VITE_BUILD_TAG ?? "dev"}</span>
