@@ -19,7 +19,7 @@ export function useScreenCapture(): UseScreenCapture {
   const chunksRef = useRef<BlobPart[]>([]);
 
   const start = useCallback(async (mode: CaptureMode) => {
-    // Clean any prior state
+    // reset any prior state
     if (recRef.current) {
       try { recRef.current.stop(); } catch {}
       recRef.current = null;
@@ -27,17 +27,17 @@ export function useScreenCapture(): UseScreenCapture {
     chunksRef.current = [];
     setBlob(null);
 
-    // Get stream
-    const s = mode === "screen"
-      ? await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: true })
-      : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    // capture stream
+    const s: MediaStream =
+      mode === "screen"
+        ? await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: true })
+        : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
     setStream(s);
 
-    // Recorder
+    // pick a mime if supported
     let mime = "";
     if ("MediaRecorder" in window) {
-      // Pick a broadly supported mime; browser may ignore and choose
       if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) mime = "video/webm;codecs=vp9,opus";
       else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) mime = "video/webm;codecs=vp8,opus";
       else if (MediaRecorder.isTypeSupported("video/webm")) mime = "video/webm";
@@ -46,7 +46,7 @@ export function useScreenCapture(): UseScreenCapture {
     const rec = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
     recRef.current = rec;
 
-    rec.ondataavailable = (e) => {
+    rec.ondataavailable = (e: BlobEvent) => {
       if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
     };
     rec.onstop = () => {
@@ -54,12 +54,12 @@ export function useScreenCapture(): UseScreenCapture {
       setBlob(finalBlob);
       chunksRef.current = [];
       setRecording(false);
-      // Keep stream for preview if you want, or stop here and only show blob
-      try { s.getTracks().forEach(t => t.stop()); } catch {}
+      // stop tracks (end live preview)
+      try { s.getTracks().forEach((t: MediaStreamTrack) => t.stop()); } catch {}
       setStream(null);
     };
 
-    rec.start(200); // gather chunks ~5fps
+    rec.start(200); // gather chunks
     setRecording(true);
   }, []);
 
@@ -73,7 +73,7 @@ export function useScreenCapture(): UseScreenCapture {
     try {
       if (recRef.current && recRef.current.state !== "inactive") recRef.current.stop();
     } catch {}
-    try { stream?.getTracks().forEach(t => t.stop()); } catch {}
+    try { stream?.getTracks().forEach((t: MediaStreamTrack) => t.stop()); } catch {}
     recRef.current = null;
     chunksRef.current = [];
     setStream(null);

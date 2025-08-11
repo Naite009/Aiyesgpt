@@ -1,43 +1,97 @@
-// deno-lint-ignore-file no-explicit-any
+// @ts-nocheck
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-Deno.serve(async (req) => {
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
+// … rest of the file unchanged …
+
+
+export default async function handler(req: Request) {
+  if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+
   try {
-    const { image, instruction_step, user_action } = await req.json();
-    if (!image || !instruction_step) return json({ error: "image and instruction_step required" }, 400);
+    const authHeader = req.headers.get("authorization") || "";
+    // If you enabled "Verify JWT with legacy secret", we can trust req.headers in supabase functions env.
+    // Optionally: validate JWT here if you want stricter checks.
 
-    const apiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!apiKey) return json({ error: "Missing GEMINI_API_KEY" }, 500);
+    const body = await req.json().catch(() => ({}));
+    if (body.ping) return json({ ok: true });
 
-    const geminiRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: `You are verifying whether the user performed this step correctly: "${instruction_step}". Provide a confidence [0..1] and brief feedback.` },
-            { inline_data: { mime_type: "image/jpeg", data: image.split(",")[1] } }
-          ]
-        }]
-      })
-    });
+    const step: string = body.instruction_step || "";
+    const image: string | null = typeof body.image === "string" ? body.image : null;
+    const frames: string[] | null = Array.isArray(body.frames) ? body.frames : null;
 
-    if (!geminiRes.ok) {
-      const t = await geminiRes.text();
-      return json({ error: "Gemini error", detail: t }, 500);
+    if (!step) return json({ error: "Missing instruction_step" }, 400);
+    if (!image && (!frames || frames.length === 0)) {
+      return json({ error: "Provide image or frames[]" }, 400);
     }
-    const payload = await geminiRes.json();
 
-    const feedback = payload?.candidates?.[0]?.content?.parts?.[0]?.text ?? "No feedback";
-    const confidence = /([0-1](?:\.\d+)?)/.exec(feedback)?.[1];
-    const conf = Math.max(0, Math.min(1, Number(confidence) || 0.6));
+    // Build contents for Gemini
+    const parts: any[] = [{ text: `Verify whether the user is performing this step: "${step}". 
+Return JSON with fields: confidence (0..1) and feedback (1–2 short sentences).` }];
 
-    return json({ confidence: conf, feedback });
+    if (frames && frames.length) {
+      for (const f of frames) {
+        const { mime, b64 } = splitDataUrl(f);
+        parts.push({ inline_data: { mime_type: mime, data: b64 } });
+      }
+    } else if (image) {
+      const { mime, b64 } = splitDataUrl(image);
+      parts.push({ inline_data: { mime_type: mime, data: b64 } });
+    }
+
+    const gem = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts }] }),
+      }
+    );
+
+    if (!gem.ok) {
+      const text = await gem.text();
+      console.error("[verify_step] Gemini error", gem.status, text);
+      return json({ error: "Gemini error", status: gem.status, detail: text }, 500);
+    }
+
+    const out = await gem.json();
+    // Try to parse a JSON answer from the model; fall back if needed
+    const raw = extractText(out);
+    const parsed = safeParseJson(raw);
+    const confidence = clamp01(parsed?.confidence ?? parsed?.score ?? 0.5);
+    const feedback = (parsed?.feedback as string) || "Checked.";
+
+    return json({ confidence, feedback });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("[verify_step] exception", e);
+    return json({ error: "Unhandled error" }, 500);
   }
-});
-
-function json(body: any, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
+
+function json(obj: unknown, status = 200) {
+  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+}
+
+function splitDataUrl(dataUrl: string) {
+  if (!dataUrl.startsWith("data:")) throw new Error("Expected data URL");
+  const [meta, b64] = dataUrl.split(",", 2);
+  const mime = meta.slice(5, meta.indexOf(";"));
+  return { mime, b64 };
+}
+
+// Extract text from Gemini response
+function extractText(resp: any): string {
+  try {
+    const c = resp.candidates?.[0];
+    const parts = c?.content?.parts || [];
+    const texts = parts.map((p: any) => p.text).filter(Boolean);
+    return texts.join("\n");
+  } catch { return ""; }
+}
+
+function safeParseJson(s: string | undefined) {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+function clamp01(x: number) { return Math.max(0, Math.min(1, x)); }
