@@ -133,6 +133,11 @@ small { color: var(--text-dimmer); }
   border-color: var(--border);
 }
 
+.btn-success { background: #16a34a; color: #fff; border-color: transparent; }
+.btn-success:hover { filter: brightness(0.95); }
+.btn-danger { background: #dc2626; color: #fff; border-color: transparent; }
+.btn-danger:hover { filter: brightness(0.95); }
+
 /* Badges */
 .badge {
   display: inline-flex;
@@ -152,7 +157,8 @@ a { color: inherit; text-decoration: none; }
 /* Line clamp utility */
 .line-clamp-2 {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 2; /* vendor */
+  line-clamp: 2;         /* standard (linter hint) */
   -webkit-box-orient: vertical;
   overflow: hidden;
 }

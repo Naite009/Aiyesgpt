@@ -13,6 +13,10 @@ type InstructionRow = {
   created_at: string;
 };
 
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 export default function Studio() {
   const cap = useScreenCapture();
   const { notify } = useToast();
@@ -23,13 +27,42 @@ export default function Studio() {
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
 
-  // NEW: attach to instruction
+  // Attach to instruction
   const [myInstructions, setMyInstructions] = useState<InstructionRow[]>([]);
   const [attachTo, setAttachTo] = useState<string>(""); // instruction_id or ""
+  const [loadingIns, setLoadingIns] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Preview the recorded blob
+  // Load instructions (yours + public if signed in, else public only)
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      setLoadingIns(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      const q = supabase
+        .from("instructions")
+        .select("id,title,created_by,is_public,created_at")
+        .order("created_at", { ascending: false })
+        .limit(1000);
+
+      const { data, error } = user
+        ? await q.or(`is_public.eq.true,created_by.eq.${user.id}`)
+        : await q.eq("is_public", true);
+
+      if (!active) return;
+      if (error) {
+        console.error("[studio] load instructions error", error);
+        setMyInstructions([]);
+      } else {
+        setMyInstructions((data ?? []) as InstructionRow[]);
+      }
+      setLoadingIns(false);
+    })();
+    return () => { active = false; };
+  }, []);
+
+  // Preview the recorded blob after stop()
   useEffect(() => {
     if (!videoRef.current) return;
     if (!cap.blob) {
@@ -39,31 +72,11 @@ export default function Studio() {
     }
     const url = URL.createObjectURL(cap.blob);
     videoRef.current.src = url;
-    videoRef.current.onloadeddata = () => videoRef.current?.play().catch(() => {});
+    videoRef.current.onloadeddata = () => {
+      videoRef.current?.play().catch(() => {});
+    };
     return () => URL.revokeObjectURL(url);
   }, [cap.blob]);
-
-  // Load the current user's instructions for the dropdown
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return setMyInstructions([]);
-      const { data, error } = await supabase
-        .from("instructions")
-        .select("id,title,created_by,is_public,created_at")
-        .or(`is_public.eq.true,created_by.eq.${user.id}`) // show your own + public
-        .order("created_at", { ascending: false })
-        .limit(1000);
-      if (!active) return;
-      if (error) {
-        console.error("[studio] load instructions error", error);
-        return;
-      }
-      setMyInstructions((data ?? []) as InstructionRow[]);
-    })();
-    return () => { active = false; };
-  }, []);
 
   // Thumbnail from first frame
   async function extractThumbnail(blob: Blob): Promise<Blob> {
@@ -74,8 +87,10 @@ export default function Studio() {
       v.onloadeddata = () => { try { v.currentTime = Math.min(0.25, (v.duration || 1) * 0.05); } catch {} };
       v.onseeked = () => {
         const canvas = document.createElement("canvas");
+        const w = v.videoWidth || 1280;
+        const h = v.videoHeight || 720;
         canvas.width = 640;
-        canvas.height = Math.round((v.videoHeight / v.videoWidth) * 640) || 360;
+        canvas.height = Math.round((h / w) * 640) || 360;
         const ctx = canvas.getContext("2d");
         if (!ctx) { URL.revokeObjectURL(url); return reject(new Error("no canvas")); }
         ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
@@ -114,33 +129,29 @@ export default function Studio() {
 
       setSaving(true);
 
-      // Build private storage paths
       const fileId = uuidv4();
-      const videoPath = `${user.id}/${fileId}.webm`;
+      const ext = ".webm";
+      const videoPath = `${user.id}/${fileId}${ext}`;
       const thumbPath = `${user.id}/${fileId}.png`;
 
-      // Upload video (PRIVATE bucket)
       const { error: upErr } = await supabase.storage.from("lessons")
         .upload(videoPath, cap.blob, { contentType: cap.blob.type || "video/webm", upsert: false });
       if (upErr) throw upErr;
 
-      // Upload thumbnail
       const thumb = await extractThumbnail(cap.blob);
       const { error: thErr } = await supabase.storage.from("lessons")
         .upload(thumbPath, thumb, { contentType: "image/png", upsert: false });
       if (thErr) throw thErr;
 
-      // Duration
       const duration = await getAccurateDuration(cap.blob);
 
-      // Insert DB row (store PATHS + optional instruction attachment)
       const { error: dbErr } = await supabase.from("lessons").insert({
         title: title.trim(),
         description: description.trim() || null,
         duration,
         video_path: videoPath,
         thumbnail_path: thumbPath,
-        video_url: null,        // legacy fields unused now
+        video_url: null,
         thumbnail_url: null,
         created_by: user.id,
         instruction_id: attachTo || null,
@@ -150,7 +161,9 @@ export default function Studio() {
       notify({
         tone: "success",
         title: "Saved",
-        message: attachTo ? "Lesson uploaded and linked. View it in Lessons or try the instruction." : "Lesson uploaded (private). View it in Lessons.",
+        message: attachTo
+          ? "Lesson uploaded and linked. View it in Lessons or try the instruction."
+          : "Lesson uploaded (private). View it in Lessons.",
       });
       cap.reset();
       setTitle(""); setDescription("");
@@ -168,7 +181,7 @@ export default function Studio() {
       <h1 className="text-2xl font-semibold">Lesson Studio</h1>
 
       <div className="card p-4 space-y-3">
-        {/* Controls row (includes Go to Lessons) */}
+        {/* Controls row */}
         <div className="flex flex-wrap items-center gap-2">
           <label className={`btn ${mode === "screen" ? "btn-primary" : "btn-outline"}`}>
             <input type="radio" className="hidden" checked={mode === "screen"} onChange={() => setMode("screen")} />
@@ -180,15 +193,21 @@ export default function Studio() {
           </label>
 
           {!cap.recording ? (
-            <button className="btn btn-primary" onClick={() => cap.start(mode)}>Start recording</button>
+            <button
+              className="btn btn-primary"
+              onClick={() => cap.start(mode)} // <-- fixed: only 1 arg allowed by your hook
+            >
+              Start recording
+            </button>
           ) : (
             <button className="btn btn-outline" onClick={cap.stop}>Stop & preview</button>
           )}
 
-          {cap.blob && <button className="btn btn-outline" onClick={cap.reset}>Discard</button>}
+          {cap.blob && (
+            <button className="btn btn-danger" onClick={cap.reset}>Discard</button>
+          )}
 
-          {/* Always-visible link */}
-          <Link to="/lessons" className="btn btn-outline">Go to Lessons</Link>
+          <Link to="/lessons" className="btn btn-success">Go to Lessons</Link>
         </div>
 
         {/* Metadata + Attach */}
@@ -209,14 +228,20 @@ export default function Studio() {
               className="input"
               value={attachTo}
               onChange={(e) => setAttachTo(e.target.value)}
+              disabled={loadingIns || myInstructions.length === 0}
             >
-              <option value="">— None —</option>
+              <option value="">{loadingIns ? "Loading…" : "— None —"}</option>
               {myInstructions.map((i) => (
                 <option key={i.id} value={i.id}>
                   {i.title}
                 </option>
               ))}
             </select>
+            {!loadingIns && myInstructions.length === 0 && (
+              <div className="text-xs text-white/60 mt-1">
+                No instructions found. Create one in <Link to="/create" className="underline">Create</Link>, or make an existing instruction public.
+              </div>
+            )}
           </label>
 
           <label className="grid gap-1 sm:col-span-2">
@@ -233,7 +258,18 @@ export default function Studio() {
         {/* Preview */}
         <div className="grid gap-2">
           <div className="text-sm text-white/70">Preview</div>
-          <video ref={videoRef} controls className="w-full rounded-xl bg-black aspect-video" />
+          <video
+            ref={videoRef}
+            controls
+            playsInline
+            className="w-full rounded-xl bg-black aspect-video"
+            aria-label="Recording preview"
+          />
+          {isIOS() && (
+            <div className="text-xs text-white/60">
+              Heads up: iPhone Safari may not preview WebM. Your recording will still upload and play on desktop.
+            </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -252,7 +288,7 @@ export default function Studio() {
           )}
           {justSaved && (
             <>
-              <Link to="/lessons" className="btn btn-primary">View in Lessons</Link>
+              <Link to="/lessons" className="btn btn-success">View in Lessons</Link>
               {attachTo && <Link to={`/guided/${attachTo}`} className="btn btn-outline">Try Attached Instruction</Link>}
             </>
           )}
@@ -261,7 +297,7 @@ export default function Studio() {
 
       <div className="text-sm text-white/60">
         Tip: choose <b>Screen</b> to record code walkthroughs (e.g., highlight <code>PUT_API_KEY_HERE</code>,
-        paste your key, save). Attach it to an instruction so learners can click <b>Try This</b> from the Lessons page.
+        paste your key, save). Attach it so learners get a <b>Try This</b> button in Lessons.
       </div>
     </div>
   );
