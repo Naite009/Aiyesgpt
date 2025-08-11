@@ -13,10 +13,20 @@ import Favorites from "./pages/Favorites";
 import Create from "./pages/Create";
 import Studio from "./pages/Studio";
 import Lessons from "./pages/Lessons";
-import Guided from "./pages/Guided";
 import TestMode from "./pages/TestMode";
 
 import "./index.css";
+
+import Guided from "./pages/Guided"; // must exist with export default
+
+<Route path="student" element={<StudentLayout />}>
+  <Route index element={<Navigate to="browse" replace />} />
+  <Route path="browse" element={<Browse />} />
+  <Route path="favorites" element={<Favorites />} />
+  <Route path="guided/:id" element={<Guided />} />  {/* <-- This is the one */}
+  <Route path="test/:id" element={<TestMode />} />
+</Route>
+
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
