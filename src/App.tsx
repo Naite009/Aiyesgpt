@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useEffect } from "react";
 
-function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
+function TopLink({ to, children }: { to: string; children: React.ReactNode }) {
   return (
     <NavLink
       to={to}
@@ -28,15 +28,10 @@ export default function App() {
     <div className="min-h-dvh flex flex-col">
       <header className="sticky top-0 z-30 backdrop-blur bg-black/40 border-b border-white/10">
         <div className="mx-auto max-w-6xl w-full px-4 h-14 flex items-center gap-3">
-          <Link to="/" className="font-semibold text-white mr-2">
-            Aiyes
-          </Link>
+          <Link to="/" className="font-semibold text-white mr-2">Aiyes</Link>
           <nav className="flex items-center gap-1">
-            <NavItem to="/browse">Browse</NavItem>
-            <NavItem to="/create">Create</NavItem>
-            <NavItem to="/studio">Studio</NavItem>
-            <NavItem to="/lessons">Lessons</NavItem>
-            <NavItem to="/favorites">Favorites</NavItem>
+            <TopLink to="/student/browse">Student</TopLink>
+            <TopLink to="/teacher/create">Teacher</TopLink>
           </nav>
         </div>
       </header>
