@@ -26,6 +26,7 @@ export default function App() {
 
   return (
     <div className="min-h-dvh flex flex-col">
+      {/* Header */}
       <header className="sticky top-0 z-30 backdrop-blur bg-black/40 border-b border-white/10">
         <div className="mx-auto max-w-6xl w-full px-4 h-14 flex items-center gap-3">
           <Link to="/" className="font-semibold text-white mr-2">Aiyes</Link>
@@ -39,15 +40,17 @@ export default function App() {
         </div>
       </header>
 
+      {/* Page content */}
       <main className="mx-auto max-w-6xl w-full px-4 py-6 flex-1">
         <Outlet />
       </main>
 
+      {/* Footer */}
       <footer className="mx-auto max-w-6xl w-full px-4 py-6 text-sm text-white/50">
-        Aiyes · Build, watch, and verify steps with AI
+        Aiyes - Build, watch, and verify steps with AI{" "}
+        {/* Show build tag if provided (optional) */}
+        {" | build: "}{import.meta.env?.VITE_BUILD_TAG ?? "dev"}
       </footer>
     </div>
   );
 }
-// build: 2025-08-11T21:14:05Z
- · <span id="build">build: {import.meta.env?.VITE_BUILD_TAG ?? "dev"}</span>
