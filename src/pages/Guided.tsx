@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ToastProvider";
-import { parseStepsFromMarkdown } from "@/services/ai"; // if you had this util here; otherwise implement a simple parser below
 import { verifyStepImage, verifyStepBurst } from "@/services/ai";
 
 type Instruction = { id: string; title: string; content: string };
@@ -42,10 +41,7 @@ export default function Guided() {
       }
       const insRow = data as Instruction;
       setIns(insRow);
-      const parsed = parseStepsFromMarkdown
-        ? parseStepsFromMarkdown(insRow.content) || []
-        : simpleParseSteps(insRow.content);
-      setSteps(parsed);
+      setSteps(simpleParseSteps(insRow.content));
     })();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,7 +231,6 @@ export default function Guided() {
   );
 }
 
-// Fallback tiny parser if you don't have parseStepsFromMarkdown implemented:
 function simpleParseSteps(md: string): string[] {
   const lines = md.split(/\r?\n/).map((l) => l.trim());
   const steps: string[] = [];

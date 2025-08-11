@@ -34,6 +34,7 @@ export default function Studio() {
 
   const liveRef = useRef<HTMLVideoElement | null>(null);
   const previewRef = useRef<HTMLVideoElement | null>(null);
+  const [noVideoTracks, setNoVideoTracks] = useState(false);
 
   // Load instructions (yours + public if signed in, else public only)
   useEffect(() => {
@@ -63,34 +64,66 @@ export default function Studio() {
     return () => { active = false; };
   }, []);
 
-  // Bind LIVE stream to liveRef while recording
+  // Bind LIVE stream to <video> while recording, with robust autoplay
   useEffect(() => {
-    if (!liveRef.current) return;
-    if (cap.recording && cap.stream) {
-      try {
-        liveRef.current.srcObject = cap.stream;
-        liveRef.current.onloadedmetadata = () => liveRef.current?.play().catch(() => {});
-      } catch (e) {
-        console.warn("live preview bind error", e);
-      }
+    const el = liveRef.current;
+    const s = cap.stream;
+    if (!el) return;
+
+    // cleanup any old srcObject
+    try { (el as any).srcObject = null; } catch {}
+
+    if (cap.recording && s) {
+      const hasVideo = s.getVideoTracks().length > 0;
+      setNoVideoTracks(!hasVideo);
+
+      el.muted = true;       // required for autoplay in many browsers
+      el.playsInline = true; // iOS
+      (el as any).srcObject = s;
+
+      const tryPlay = () => {
+        const p = el.play();
+        if (p && typeof p.then === "function") {
+          p.catch(() => {
+            // Some browsers need a second attempt after metadata/canplay
+          });
+        }
+      };
+
+      // Try immediately…
+      tryPlay();
+
+      // …and again on key media events
+      const onLoadedMeta = () => tryPlay();
+      const onCanPlay = () => tryPlay();
+      const onPlaying = () => {}; // no-op, but keeps listeners symmetrical
+
+      el.addEventListener("loadedmetadata", onLoadedMeta);
+      el.addEventListener("canplay", onCanPlay);
+      el.addEventListener("playing", onPlaying);
+
+      return () => {
+        el.removeEventListener("loadedmetadata", onLoadedMeta);
+        el.removeEventListener("canplay", onCanPlay);
+        el.removeEventListener("playing", onPlaying);
+      };
     } else {
-      if (liveRef.current) {
-        try { (liveRef.current as any).srcObject = null; } catch {}
-      }
+      setNoVideoTracks(false);
     }
   }, [cap.recording, cap.stream]);
 
   // Bind BLOB preview after stop
   useEffect(() => {
-    if (!previewRef.current) return;
+    const el = previewRef.current;
+    if (!el) return;
     if (!cap.blob) {
-      previewRef.current.removeAttribute("src");
-      previewRef.current.load();
+      el.removeAttribute("src");
+      el.load();
       return;
     }
     const url = URL.createObjectURL(cap.blob);
-    previewRef.current.src = url;
-    previewRef.current.onloadeddata = () => previewRef.current?.play().catch(() => {});
+    el.src = url;
+    el.onloadeddata = () => el.play().catch(() => {});
     return () => URL.revokeObjectURL(url);
   }, [cap.blob]);
 
@@ -220,7 +253,7 @@ export default function Studio() {
             <button className="btn btn-danger" onClick={cap.reset}>Discard</button>
           )}
 
-          <Link to="/lessons" className="btn btn-success">Go to Lessons</Link>
+          <Link to="/teacher/lessons" className="btn btn-success">Go to Lessons</Link>
         </div>
 
         {/* Metadata + Attach */}
@@ -252,7 +285,7 @@ export default function Studio() {
             </select>
             {!loadingIns && myInstructions.length === 0 && (
               <div className="text-xs text-white/60 mt-1">
-                No instructions found. Create one in <Link to="/create" className="underline">Create</Link>, or make an existing instruction public.
+                No instructions found. Create one in <Link to="/teacher/create" className="underline">Create</Link>, or make an existing instruction public.
               </div>
             )}
           </label>
@@ -269,10 +302,15 @@ export default function Studio() {
         </div>
 
         {/* Live preview while recording */}
-        {cap.recording && cap.stream && (
+        {cap.recording && (
           <div className="grid gap-2">
             <div className="text-sm text-white/70">Live preview</div>
-            <video ref={liveRef} muted playsInline autoPlay className="w-full rounded-xl bg-black aspect-video" />
+            <video ref={liveRef} className="w-full rounded-xl bg-black aspect-video" />
+            {noVideoTracks && (
+              <div className="text-xs text-white/60">
+                No video track detected. If you’re sharing a screen, choose a window/tab that has motion or switch to <b>Camera</b>.
+              </div>
+            )}
           </div>
         )}
 
@@ -309,8 +347,8 @@ export default function Studio() {
           )}
           {justSaved && (
             <>
-              <Link to="/lessons" className="btn btn-success">View in Lessons</Link>
-              {attachTo && <Link to={`/guided/${attachTo}`} className="btn btn-outline">Try Attached Instruction</Link>}
+              <Link to="/teacher/lessons" className="btn btn-success">View in Lessons</Link>
+              {attachTo && <Link to={`/student/guided/${attachTo}`} className="btn btn-outline">Try Attached Instruction</Link>}
             </>
           )}
         </div>
