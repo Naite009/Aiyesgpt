@@ -26,7 +26,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           {/* Default → student browse */}
           <Route index element={<Navigate to="/student/browse" replace />} />
 
-          {/* Student area */}
+          {/* ===== Preferred layout routes ===== */}
           <Route path="student" element={<StudentLayout />}>
             <Route index element={<Navigate to="browse" replace />} />
             <Route path="browse" element={<Browse />} />
@@ -35,7 +35,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="test/:id" element={<TestMode />} />
           </Route>
 
-          {/* Teacher area */}
           <Route path="teacher" element={<TeacherLayout />}>
             <Route index element={<Navigate to="create" replace />} />
             <Route path="create" element={<Create />} />
@@ -43,11 +42,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="lessons" element={<Lessons />} />
           </Route>
 
-          {/* Support legacy direct paths too */}
-          <Route path="guided/:id" element={<Guided />} />
-          <Route path="test/:id" element={<TestMode />} />
+          {/* ===== Direct compatibility routes (work even if layouts break) ===== */}
+          <Route path="student/browse" element={<Browse />} />
+          <Route path="student/favorites" element={<Favorites />} />
+          <Route path="student/guided/:id" element={<Guided />} />
+          <Route path="student/test/:id" element={<TestMode />} />
+
+          <Route path="teacher/create" element={<Create />} />
+          <Route path="teacher/studio" element={<Studio />} />
+          <Route path="teacher/lessons" element={<Lessons />} />
+
+          {/* ===== Legacy support ===== */}
           <Route path="browse" element={<Navigate to="/student/browse" replace />} />
           <Route path="favorites" element={<Navigate to="/student/favorites" replace />} />
+          <Route path="guided/:id" element={<Guided />} />
+          <Route path="test/:id" element={<TestMode />} />
           <Route path="create" element={<Navigate to="/teacher/create" replace />} />
           <Route path="studio" element={<Navigate to="/teacher/studio" replace />} />
           <Route path="lessons" element={<Navigate to="/teacher/lessons" replace />} />

@@ -6,9 +6,7 @@ function SubLink({ to, children }: { to: string; children: React.ReactNode }) {
       to={to}
       className={({ isActive }) =>
         `px-3 py-2 rounded-xl transition ${
-          isActive
-            ? "bg-white/10 text-white"
-            : "text-white/80 hover:text-white hover:bg-white/5"
+          isActive ? "bg-white/10 text-white" : "text-white/80 hover:text-white hover:bg-white/5"
         }`
       }
       end
