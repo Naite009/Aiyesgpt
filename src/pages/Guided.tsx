@@ -7,6 +7,8 @@ import { verifyStepImage, verifyStepBurst } from "@/services/ai";
 type Instruction = { id: string; title: string; content: string };
 type LessonMin = { id: string; title: string; video_url: string | null; video_path: string | null; created_at: string };
 
+const EDGE_URL = import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL || import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL || "";
+
 export default function Guided() {
   const { id } = useParams<{ id: string }>();
   const { notify } = useToast();
@@ -15,6 +17,7 @@ export default function Guided() {
   const [steps, setSteps] = useState<string[]>([]);
   const [idx, setIdx] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ confidence?: number; feedback?: string; error?: string } | null>(null);
 
   // lesson watch
   const [lesson, setLesson] = useState<LessonMin | null>(null);
@@ -36,15 +39,14 @@ export default function Guided() {
         .single();
       if (!active) return;
       if (error || !data) {
-        notify({ tone: "error", title: "Not found", message: "Instruction not found." });
+        setIns(null);
         return;
       }
       const insRow = data as Instruction;
       setIns(insRow);
-      setSteps(simpleParseSteps(insRow.content));
+      setSteps(parseSteps(insRow.content));
     })();
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   // Load latest lesson linked
@@ -88,9 +90,7 @@ export default function Guided() {
           videoRef.current.srcObject = s;
           videoRef.current.onloadedmetadata = () => videoRef.current?.play().catch(() => {});
         }
-      } catch (e) {
-        console.warn("camera error", e);
-      }
+      } catch {}
     })();
     return () => {
       mounted = false;
@@ -127,53 +127,45 @@ export default function Guided() {
   }
 
   async function verifySingle() {
+    setResult(null);
     try {
       setBusy(true);
+      if (!EDGE_URL) throw new Error("Verify endpoint not configured.");
       const img = await captureFrameBase64();
       const r = await verifyStepImage({ imageBase64: img, stepText: step });
-      notify({
-        tone: r.confidence >= 0.75 ? "success" : r.confidence >= 0.5 ? "info" : "error",
-        title: `Confidence ${(r.confidence * 100).toFixed(0)}%`,
-        message: r.feedback || "Checked.",
-      });
+      setResult({ confidence: r.confidence, feedback: r.feedback });
       if (r.confidence >= 0.85 && canNext) setIdx((x) => x + 1);
     } catch (e: any) {
-      notify({ tone: "error", title: "Verify failed", message: e?.message ?? "Unknown error" });
+      setResult({ error: e?.message ?? "Verify failed" });
     } finally {
       setBusy(false);
     }
   }
 
   async function verifyBurstClick() {
+    setResult(null);
     try {
       setBusy(true);
+      if (!EDGE_URL) throw new Error("Verify endpoint not configured.");
       const frames = await captureBurst(10, 120);
       const r = await verifyStepBurst({ frames, stepText: step });
-      notify({
-        tone: r.confidence >= 0.75 ? "success" : r.confidence >= 0.5 ? "info" : "error",
-        title: `Confidence ${(r.confidence * 100).toFixed(0)}%`,
-        message: r.feedback || "Checked.",
-      });
+      setResult({ confidence: r.confidence, feedback: r.feedback });
       if (r.confidence >= 0.85 && canNext) setIdx((x) => x + 1);
     } catch (e: any) {
-      notify({ tone: "error", title: "Verify failed", message: e?.message ?? "Unknown error" });
+      setResult({ error: e?.message ?? "Verify failed" });
     } finally {
       setBusy(false);
     }
   }
 
-  function speakStep() {
-    try {
-      if (!("speechSynthesis" in window)) return notify({ tone: "error", message: "TTS not supported in this browser" });
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(step || "No step selected");
-      u.rate = 1; u.pitch = 1;
-      window.speechSynthesis.speak(u);
-    } catch {}
-  }
-
   return (
     <div className="grid gap-4">
+      {!EDGE_URL && (
+        <div className="card p-3 text-amber-300/90">
+          Verify endpoint URL not set. Define <code>VITE_VERIFY_STEP_FUNCTION_URL</code> in your Vercel env.
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{ins?.title ?? "Guided Mode"}</h1>
         {lessonUrl && (
@@ -194,14 +186,27 @@ export default function Guided() {
             <div className="flex flex-wrap gap-2">
               <button className="btn btn-outline" disabled={!canPrev} onClick={() => setIdx((x) => x - 1)}>‹ Prev</button>
               <button className="btn btn-outline" disabled={!canNext} onClick={() => setIdx((x) => x + 1)}>Next ›</button>
-              <button className="btn btn-outline" onClick={speakStep}>Speak step</button>
-              <button className="btn btn-primary" onClick={verifySingle} disabled={busy}>
+              <button className="btn btn-primary" onClick={verifySingle} disabled={busy || !EDGE_URL}>
                 {busy ? "Verifying…" : "Verify (single)"}
               </button>
-              <button className="btn btn-outline" onClick={verifyBurstClick} disabled={busy}>
+              <button className="btn btn-outline" onClick={verifyBurstClick} disabled={busy || !EDGE_URL}>
                 Verify (burst)
               </button>
             </div>
+
+            {/* Inline result panel */}
+            {result && (
+              <div className="mt-2 rounded-lg bg-white/5 p-3 text-sm">
+                {"error" in result && result.error ? (
+                  <div className="text-rose-300">Error: {result.error}</div>
+                ) : (
+                  <>
+                    <div className="text-white/80">Confidence: {Math.round((result.confidence ?? 0) * 100)}%</div>
+                    <div className="text-white/70">{result.feedback || "Checked."}</div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="grid gap-2">
@@ -231,12 +236,12 @@ export default function Guided() {
   );
 }
 
-function simpleParseSteps(md: string): string[] {
+function parseSteps(md: string): string[] {
   const lines = md.split(/\r?\n/).map((l) => l.trim());
   const steps: string[] = [];
   for (const l of lines) {
     if (/^[-*]\s+/.test(l)) steps.push(l.replace(/^[-*]\s+/, ""));
     else if (/^\d+\.\s+/.test(l)) steps.push(l.replace(/^\d+\.\s+/, ""));
   }
-  return steps.length ? steps : [md];
+  return steps.length ? steps : [md].filter(Boolean);
 }

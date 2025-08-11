@@ -1,68 +1,49 @@
 import { Link } from "react-router-dom";
-import type { Instruction } from "@/types";
+import { Bookmark } from "lucide-react";
 import { useBookmarks } from "@/hooks/useBookmarks";
 
-function formatDate(iso?: string) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
+export type InstructionCardProps = {
+  id: string;
+  title: string;
+  category?: string | null;
+  tags?: string[] | null;
+  isPublic?: boolean;
+  preview?: string;
+};
 
-export default function InstructionCard({ instruction }: { instruction: Instruction }) {
+export default function InstructionCard({
+  id, title, category, tags, isPublic, preview,
+}: InstructionCardProps) {
   const { isBookmarked, toggle } = useBookmarks();
-  const fav = isBookmarked(instruction.id);
 
   return (
-    <div className="card p-4 flex flex-col gap-3">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-lg font-semibold truncate">{instruction.title}</h3>
-            {fav && (
-              <span className="badge">★ Favorite</span>
-            )}
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/60">
-            {instruction.category && <span className="badge">{instruction.category}</span>}
-            {instruction.tags?.slice(0, 3).map((t) => (
-              <span key={t} className="badge">{t}</span>
-            ))}
-            {instruction.createdAt && (
-              <span className="opacity-60">{formatDate(instruction.createdAt)}</span>
-            )}
-            {!instruction.isPublic && <span className="badge">Private</span>}
-          </div>
-        </div>
-
-        {/* Bookmark toggle */}
+    <div className="card p-4 grid gap-3">
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="text-lg font-medium leading-tight">{title}</h3>
         <button
-          className={`btn ${fav ? "btn-primary" : "btn-outline"}`}
-          onClick={() => toggle(instruction.id)}
-          title={fav ? "Remove from Favorites" : "Add to Favorites"}
+          className={`btn btn-icon ${isBookmarked(id) ? "btn-primary" : "btn-outline"}`}
+          aria-label="Bookmark"
+          onClick={() => toggle(id)}
+          title={isBookmarked(id) ? "Remove bookmark" : "Bookmark"}
         >
-          {fav ? "★ Bookmarked" : "☆ Bookmark"}
+          <Bookmark size={18} />
         </button>
       </div>
 
-      {/* Preview (first lines of content) */}
-      <div className="text-sm text-white/80 line-clamp-3 whitespace-pre-wrap">
-        {instruction.content?.split("\n").slice(0, 4).join("\n")}
+      {preview && <div className="text-white/70 line-clamp-3">{preview}</div>}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {category && <span className="badge">{category}</span>}
+        {(tags ?? []).slice(0, 3).map((t) => (
+          <span key={t} className="badge badge-outline">#{t}</span>
+        ))}
+        {isPublic && <span className="badge badge-success">Public</span>}
       </div>
 
-      {/* Actions */}
-      <div className="mt-1 flex flex-wrap gap-2">
-        <Link to={`/guided/${instruction.id}`} className="btn btn-primary">
-          Start Guided
-        </Link>
-        <Link to={`/test/${instruction.id}`} className="btn btn-outline">
-          Start Test
-        </Link>
-        {/* Optional: link to details/browse */}
-        <Link to={`/browse`} className="btn btn-outline">
-          Back to Browse
-        </Link>
+      <div className="flex flex-wrap gap-2">
+        {/* FIXED: route to student path */}
+        <Link to={`/student/guided/${id}`} className="btn btn-primary">Start Guided</Link>
+        <Link to={`/student/test/${id}`} className="btn btn-outline">Start Test</Link>
       </div>
     </div>
   );

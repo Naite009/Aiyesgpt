@@ -1,263 +1,117 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ToastProvider";
-import { useSession } from "@/hooks/useSession";
 
-type LessonRow = {
+type Row = {
   id: string;
   title: string;
   description: string | null;
   duration: number | null;
-  video_url: string | null;        // legacy public
-  thumbnail_url: string | null;    // legacy public
-  video_path: string | null;       // private
-  thumbnail_path: string | null;   // private
-  created_by: string | null;
-  instruction_id: string | null;
+  video_url: string | null;
+  video_path: string | null;
+  thumbnail_path: string | null;
   created_at: string;
+  instruction_id: string | null;
 };
 
-type InstructionMin = { id: string; title: string };
-
-const PAGE_SIZE = 12;
-
 export default function Lessons() {
-  const { user } = useSession();
   const { notify } = useToast();
-
-  const [rows, setRows] = useState<LessonRow[]>([]);
+  const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState<number>(0);
-  const [playing, setPlaying] = useState<string | null>(null);
-  const [insTitles, setInsTitles] = useState<Record<string, string>>({});
 
-  // filters
-  const [q, setQ] = useState("");
-  const [onlyMine, setOnlyMine] = useState(false);
-  const [onlyWithInstruction, setOnlyWithInstruction] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      const q = supabase
+        .from("lessons")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(200);
 
-  const pageCount = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
-
-  async function loadCount() {
-    let query = supabase.from("lessons").select("*", { count: "exact", head: true });
-    if (onlyMine && user?.id) query = query.eq("created_by", user.id);
-    if (onlyWithInstruction) query = query.not("instruction_id", "is", null);
-    const { count } = await query;
-    if (typeof count === "number") setTotal(count);
-  }
-
-  async function sign(path?: string | null, seconds = 3600) {
-    if (!path) return null;
-    const { data, error } = await supabase.storage.from("lessons").createSignedUrl(path, seconds);
-    if (error) {
-      console.error("[lessons] sign error", error);
-      return null;
-    }
-    return data.signedUrl;
-  }
-
-  function extractPathFromPublicUrl(url?: string | null): string | null {
-    if (!url) return null;
-    const i = url.indexOf("/object/public/lessons/");
-    if (i === -1) return null;
-    return url.slice(i + "/object/public/lessons/".length);
-  }
-
-  async function loadPage(p = page) {
-    setLoading(true);
-    const from = (p - 1) * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
-
-    let query = supabase.from("lessons")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .range(from, to);
-
-    if (onlyMine && user?.id) query = query.eq("created_by", user.id);
-    if (onlyWithInstruction) query = query.not("instruction_id", "is", null);
-
-    const { data, error } = await query;
-    if (error) {
-      console.error("[lessons] load error", error);
-      notify({ tone: "error", title: "Load failed", message: error.message });
-      setRows([]);
-      setLoading(false);
-      return;
-    }
-
-    let raw = (data ?? []) as LessonRow[];
-    if (q.trim()) {
-      const needle = q.trim().toLowerCase();
-      raw = raw.filter(r =>
-        r.title?.toLowerCase().includes(needle) ||
-        (r.description ?? "").toLowerCase().includes(needle)
-      );
-    }
-
-    const signed = await Promise.all(raw.map(async (r) => {
-      const vPath = r.video_path ?? extractPathFromPublicUrl(r.video_url);
-      const tPath = r.thumbnail_path ?? extractPathFromPublicUrl(r.thumbnail_url);
-      const video = vPath ? await sign(vPath) : r.video_url;
-      const thumb = tPath ? await sign(tPath) : r.thumbnail_url;
-      return { ...r, video_url: video, thumbnail_url: thumb };
-    }));
-
-    setRows(signed);
-    setLoading(false);
-
-    const ids = Array.from(new Set(signed.map(r => r.instruction_id).filter(Boolean))) as string[];
-    if (ids.length) {
-      const { data: ins, error: e2 } = await supabase.from("instructions").select("id,title").in("id", ids);
-      if (!e2 && ins) {
-        const map: Record<string, string> = {};
-        (ins as InstructionMin[]).forEach(i => { map[i.id] = i.title; });
-        setInsTitles(map);
+      const { data, error } = user ? await q.eq("created_by", user.id) : await q.eq("created_by", ""); // only show yours
+      if (!mounted) return;
+      if (error) {
+        console.error("[lessons] load error", error);
+        setRows([]);
+      } else {
+        setRows((data ?? []) as Row[]);
       }
+      setLoading(false);
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  async function open(row: Row) {
+    if (row.video_path) {
+      const { data, error } = await supabase.storage.from("lessons").createSignedUrl(row.video_path, 3600);
+      if (error || !data?.signedUrl) {
+        notify({ tone: "error", message: "Could not open video." });
+        return;
+      }
+      window.open(data.signedUrl, "_blank");
+    } else if (row.video_url) {
+      window.open(row.video_url, "_blank");
+    } else {
+      notify({ tone: "error", message: "No video available." });
     }
   }
 
-  useEffect(() => {
-    setPage(1);
-    loadCount().then(() => loadPage(1));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onlyMine, onlyWithInstruction]);
-
-  useEffect(() => {
-    loadPage(page);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, q]);
-
-  async function onDelete(id: string) {
-    if (!confirm("Delete this lesson? This cannot be undone.")) return;
-    try {
-      const row = rows.find(r => r.id === id);
-      const toRemove: string[] = [];
-      const vPath = row?.video_path ?? extractPathFromPublicUrl(row?.video_url ?? undefined);
-      const tPath = row?.thumbnail_path ?? extractPathFromPublicUrl(row?.thumbnail_url ?? undefined);
-      if (vPath) toRemove.push(vPath);
-      if (tPath) toRemove.push(tPath);
-      if (toRemove.length) await supabase.storage.from("lessons").remove(toRemove);
-
-      const { error } = await supabase.from("lessons").delete().eq("id", id);
-      if (error) throw error;
-
-      notify({ tone: "success", message: "Lesson deleted." });
-      await loadCount();
-      const newLastPage = Math.max(1, Math.ceil((total - 1) / PAGE_SIZE));
-      if (page > newLastPage) setPage(newLastPage);
-      else loadPage(page);
-    } catch (e: any) {
-      console.error("[lessons] delete error", e);
-      notify({ tone: "error", title: "Delete failed", message: e?.message ?? "Unknown error" });
-    }
+  async function remove(row: Row) {
+    if (!confirm("Delete this lesson?")) return;
+    const { error } = await supabase.from("lessons").delete().eq("id", row.id);
+    if (error) return notify({ tone: "error", message: "Delete failed." });
+    setRows((xs) => xs.filter((x) => x.id !== row.id));
   }
 
   return (
     <div className="grid gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-semibold">Lessons</h1>
-        <div className="text-sm text-white/60">{total} total · Page {page} / {pageCount}</div>
-      </div>
-
-      {/* Filters */}
-      <div className="card p-3 flex flex-wrap items-center gap-2">
-        <input
-          className="input flex-1 min-w-[220px]"
-          placeholder="Search lessons…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} />
-          Mine
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={onlyWithInstruction} onChange={(e) => setOnlyWithInstruction(e.target.checked)} />
-          Has instruction
-        </label>
-        <Link to="/studio" className="btn btn-outline ml-auto">Open Studio</Link>
-      </div>
-
+      <h1 className="text-2xl font-semibold">Lessons</h1>
       {loading ? (
-        <div className="card p-4">Loading…</div>
+        <div className="card p-4 text-white/60">Loading…</div>
       ) : rows.length === 0 ? (
-        <div className="card p-4 text-white/70">
-          No lessons found. Try clearing filters or create one in <b>Studio</b>.
-        </div>
+        <div className="card p-4 text-white/60">No lessons yet.</div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {rows.map((r) => {
-            const mine = user?.id && r.created_by === user.id;
-            const attachedTitle = r.instruction_id ? insTitles[r.instruction_id] : undefined;
-
-            return (
-              <div key={r.id} className="card p-3 flex flex-col gap-3">
-                <div className="relative">
-                  <button
-                    className="w-full"
-                    onClick={() => setPlaying((p) => (p === r.id ? null : r.id))}
-                    title="Play preview"
-                  >
-                    {playing === r.id && r.video_url ? (
-                      <video src={r.video_url} controls autoPlay className="w-full aspect-video rounded-lg bg-black" />
-                    ) : (
-                      <img
-                        src={r.thumbnail_url ?? ""}
-                        alt={r.title}
-                        className="w-full aspect-video rounded-lg object-cover bg-black"
-                        onError={(e) => ((e.target as HTMLImageElement).style.opacity = "0.4")}
-                      />
-                    )}
-                  </button>
-                </div>
-
-                <div className="min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="text-base font-semibold truncate" title={r.title}>{r.title}</h3>
-                    {r.duration ? <span className="badge">{formatDuration(r.duration)}</span> : null}
-                  </div>
-                  {r.description && <div className="text-xs text-white/70 line-clamp-2">{r.description}</div>}
-                  {attachedTitle && (
-                    <div className="text-xs text-white/70 mt-1">
-                      Linked to instruction: <span className="opacity-90">{attachedTitle}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="mt-auto flex flex-wrap gap-2">
-                  {r.video_url && (
-                    <a className="btn btn-outline" href={r.video_url} target="_blank" rel="noreferrer">Open</a>
-                  )}
-                  {r.instruction_id && (
-                    <Link className="btn btn-primary" to={`/guided/${r.instruction_id}`}>Try This</Link>
-                  )}
-                  {mine && (
-                    <button className="btn btn-outline" onClick={() => onDelete(r.id)}>Delete</button>
-                  )}
-                </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {rows.map((r) => (
+            <div key={r.id} className="card p-3 grid gap-2">
+              <div className="aspect-video w-full rounded-lg bg-black overflow-hidden">
+                {r.thumbnail_path ? (
+                  <Thumb path={r.thumbnail_path} />
+                ) : (
+                  <div className="w-full h-full grid place-items-center text-white/40">No thumbnail</div>
+                )}
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      {pageCount > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <button className="btn btn-outline" disabled={page <= 1} onClick={() => setPage(1)}>« First</button>
-          <button className="btn btn-outline" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Prev</button>
-          <button className="btn btn-outline" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next ›</button>
-          <button className="btn btn-outline" disabled={page >= pageCount} onClick={() => setPage(pageCount)}>Last »</button>
+              <div className="font-medium">{r.title}</div>
+              {r.description && <div className="text-white/70 text-sm line-clamp-2">{r.description}</div>}
+              <div className="text-white/60 text-xs">{r.duration ? `${r.duration}s` : ""}</div>
+              <div className="flex flex-wrap gap-2">
+                {r.instruction_id && (
+                  <Link to={`/student/guided/${r.instruction_id}`} className="btn btn-primary">Try This</Link>
+                )}
+                <button className="btn btn-outline" onClick={() => open(r)}>Open</button>
+                <button className="btn btn-danger" onClick={() => remove(r)}>Delete</button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function formatDuration(s?: number | null) {
-  if (!s || s < 1) return "0:00";
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${String(r).padStart(2, "0")}`;
+function Thumb({ path }: { path: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data } = await supabase.storage.from("lessons").createSignedUrl(path, 3600);
+      if (!mounted) return;
+      setUrl(data?.signedUrl ?? null);
+    })();
+    return () => { mounted = false; };
+  }, [path]);
+  return url ? <img src={url} className="w-full h-full object-cover" /> : <div className="w-full h-full bg-white/5" />;
 }
