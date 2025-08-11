@@ -78,7 +78,6 @@ export default function Lessons() {
     if (onlyMine && user?.id) query = query.eq("created_by", user.id);
     if (onlyWithInstruction) query = query.not("instruction_id", "is", null);
 
-    // simple search by title/description (client-side after fetch to keep SQL simple)
     const { data, error } = await query;
     if (error) {
       console.error("[lessons] load error", error);
@@ -97,7 +96,6 @@ export default function Lessons() {
       );
     }
 
-    // Sign URLs
     const signed = await Promise.all(raw.map(async (r) => {
       const vPath = r.video_path ?? extractPathFromPublicUrl(r.video_url);
       const tPath = r.thumbnail_path ?? extractPathFromPublicUrl(r.thumbnail_url);
@@ -109,7 +107,6 @@ export default function Lessons() {
     setRows(signed);
     setLoading(false);
 
-    // Load titles for any attached instruction_ids
     const ids = Array.from(new Set(signed.map(r => r.instruction_id).filter(Boolean))) as string[];
     if (ids.length) {
       const { data: ins, error: e2 } = await supabase.from("instructions").select("id,title").in("id", ids);
@@ -131,6 +128,31 @@ export default function Lessons() {
     loadPage(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, q]);
+
+  async function onDelete(id: string) {
+    if (!confirm("Delete this lesson? This cannot be undone.")) return;
+    try {
+      const row = rows.find(r => r.id === id);
+      const toRemove: string[] = [];
+      const vPath = row?.video_path ?? extractPathFromPublicUrl(row?.video_url ?? undefined);
+      const tPath = row?.thumbnail_path ?? extractPathFromPublicUrl(row?.thumbnail_url ?? undefined);
+      if (vPath) toRemove.push(vPath);
+      if (tPath) toRemove.push(tPath);
+      if (toRemove.length) await supabase.storage.from("lessons").remove(toRemove);
+
+      const { error } = await supabase.from("lessons").delete().eq("id", id);
+      if (error) throw error;
+
+      notify({ tone: "success", message: "Lesson deleted." });
+      await loadCount();
+      const newLastPage = Math.max(1, Math.ceil((total - 1) / PAGE_SIZE));
+      if (page > newLastPage) setPage(newLastPage);
+      else loadPage(page);
+    } catch (e: any) {
+      console.error("[lessons] delete error", e);
+      notify({ tone: "error", title: "Delete failed", message: e?.message ?? "Unknown error" });
+    }
+  }
 
   return (
     <div className="grid gap-4">
@@ -173,7 +195,11 @@ export default function Lessons() {
             return (
               <div key={r.id} className="card p-3 flex flex-col gap-3">
                 <div className="relative">
-                  <button className="w-full" onClick={() => setPlaying((p) => (p === r.id ? null : r.id))} title="Play preview">
+                  <button
+                    className="w-full"
+                    onClick={() => setPlaying((p) => (p === r.id ? null : r.id))}
+                    title="Play preview"
+                  >
                     {playing === r.id && r.video_url ? (
                       <video src={r.video_url} controls autoPlay className="w-full aspect-video rounded-lg bg-black" />
                     ) : (
@@ -208,20 +234,7 @@ export default function Lessons() {
                     <Link className="btn btn-primary" to={`/guided/${r.instruction_id}`}>Try This</Link>
                   )}
                   {mine && (
-                    <button
-                      className="btn btn-outline"
-                      onClick={async () => {
-                        if (!confirm("Delete this lesson?")) return;
-                        const vPath = r.video_path ?? extractPathFromPublicUrl(r.video_url ?? undefined);
-                        const tPath = r.thumbnail_path ?? extractPathFromPublicUrl(r.thumbnail_url ?? undefined);
-                        if (vPath) await supabase.storage.from("lessons").remove([vPath]);
-                        if (tPath) await supabase.storage.from("lessons").remove([tPath]);
-                        await supabase.from("lessons").delete().eq("id", r.id);
-                        setRows(rows.filter(x => x.id !== r.id));
-                      }}
-                    >
-                      Delete
-                    </button>
+                    <button className="btn btn-outline" onClick={() => onDelete(r.id)}>Delete</button>
                   )}
                 </div>
               </div>

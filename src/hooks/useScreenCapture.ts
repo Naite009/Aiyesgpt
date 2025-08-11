@@ -1,54 +1,85 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-export function useScreenCapture() {
+export type CaptureMode = "screen" | "camera";
+
+type UseScreenCapture = {
+  recording: boolean;
+  stream: MediaStream | null;
+  blob: Blob | null;
+  start: (mode: CaptureMode) => Promise<void>;
+  stop: () => Promise<void>;
+  reset: () => void;
+};
+
+export function useScreenCapture(): UseScreenCapture {
   const [recording, setRecording] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const [blob, setBlob] = useState<Blob | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
   const recRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
 
-  async function start(kind: "screen" | "camera" = "screen") {
-    let stream: MediaStream;
-    if (kind === "screen") {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 60 } as any },
-        audio: false,
-      });
-    } else {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
+  const start = useCallback(async (mode: CaptureMode) => {
+    // Clean any prior state
+    if (recRef.current) {
+      try { recRef.current.stop(); } catch {}
+      recRef.current = null;
     }
-    streamRef.current = stream;
-
-    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-      ? "video/webm;codecs=vp9"
-      : "video/webm;codecs=vp8";
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 3_000_000 });
-    recRef.current = rec;
     chunksRef.current = [];
+    setBlob(null);
 
-    rec.ondataavailable = (e) => e.data && chunksRef.current.push(e.data);
+    // Get stream
+    const s = mode === "screen"
+      ? await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: true })
+      : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+    setStream(s);
+
+    // Recorder
+    let mime = "";
+    if ("MediaRecorder" in window) {
+      // Pick a broadly supported mime; browser may ignore and choose
+      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) mime = "video/webm;codecs=vp9,opus";
+      else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) mime = "video/webm;codecs=vp8,opus";
+      else if (MediaRecorder.isTypeSupported("video/webm")) mime = "video/webm";
+    }
+
+    const rec = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
+    recRef.current = rec;
+
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
     rec.onstop = () => {
-      const out = new Blob(chunksRef.current, { type: mime });
-      setBlob(out);
+      const finalBlob = new Blob(chunksRef.current, { type: mime || "video/webm" });
+      setBlob(finalBlob);
+      chunksRef.current = [];
+      setRecording(false);
+      // Keep stream for preview if you want, or stop here and only show blob
+      try { s.getTracks().forEach(t => t.stop()); } catch {}
+      setStream(null);
     };
 
-    rec.start(250);
+    rec.start(200); // gather chunks ~5fps
     setRecording(true);
-  }
+  }, []);
 
-  function stop() {
-    recRef.current?.stop();
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    setRecording(false);
-  }
+  const stop = useCallback(async () => {
+    if (recRef.current && recRef.current.state !== "inactive") {
+      recRef.current.stop();
+    }
+  }, []);
 
-  function reset() {
-    setBlob(null);
+  const reset = useCallback(() => {
+    try {
+      if (recRef.current && recRef.current.state !== "inactive") recRef.current.stop();
+    } catch {}
+    try { stream?.getTracks().forEach(t => t.stop()); } catch {}
+    recRef.current = null;
     chunksRef.current = [];
-  }
+    setStream(null);
+    setBlob(null);
+    setRecording(false);
+  }, [stream]);
 
-  return { start, stop, reset, recording, blob };
+  return { recording, stream, blob, start, stop, reset };
 }

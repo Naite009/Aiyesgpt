@@ -32,7 +32,8 @@ export default function Studio() {
   const [attachTo, setAttachTo] = useState<string>(""); // instruction_id or ""
   const [loadingIns, setLoadingIns] = useState(true);
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const liveRef = useRef<HTMLVideoElement | null>(null);
+  const previewRef = useRef<HTMLVideoElement | null>(null);
 
   // Load instructions (yours + public if signed in, else public only)
   useEffect(() => {
@@ -62,19 +63,34 @@ export default function Studio() {
     return () => { active = false; };
   }, []);
 
-  // Preview the recorded blob after stop()
+  // Bind LIVE stream to liveRef while recording
   useEffect(() => {
-    if (!videoRef.current) return;
+    if (!liveRef.current) return;
+    if (cap.recording && cap.stream) {
+      try {
+        liveRef.current.srcObject = cap.stream;
+        liveRef.current.onloadedmetadata = () => liveRef.current?.play().catch(() => {});
+      } catch (e) {
+        console.warn("live preview bind error", e);
+      }
+    } else {
+      if (liveRef.current) {
+        try { (liveRef.current as any).srcObject = null; } catch {}
+      }
+    }
+  }, [cap.recording, cap.stream]);
+
+  // Bind BLOB preview after stop
+  useEffect(() => {
+    if (!previewRef.current) return;
     if (!cap.blob) {
-      videoRef.current.removeAttribute("src");
-      videoRef.current.load();
+      previewRef.current.removeAttribute("src");
+      previewRef.current.load();
       return;
     }
     const url = URL.createObjectURL(cap.blob);
-    videoRef.current.src = url;
-    videoRef.current.onloadeddata = () => {
-      videoRef.current?.play().catch(() => {});
-    };
+    previewRef.current.src = url;
+    previewRef.current.onloadeddata = () => previewRef.current?.play().catch(() => {});
     return () => URL.revokeObjectURL(url);
   }, [cap.blob]);
 
@@ -193,10 +209,7 @@ export default function Studio() {
           </label>
 
           {!cap.recording ? (
-            <button
-              className="btn btn-primary"
-              onClick={() => cap.start(mode)} // <-- fixed: only 1 arg allowed by your hook
-            >
+            <button className="btn btn-primary" onClick={() => cap.start(mode)}>
               Start recording
             </button>
           ) : (
@@ -255,11 +268,19 @@ export default function Studio() {
           </label>
         </div>
 
-        {/* Preview */}
+        {/* Live preview while recording */}
+        {cap.recording && cap.stream && (
+          <div className="grid gap-2">
+            <div className="text-sm text-white/70">Live preview</div>
+            <video ref={liveRef} muted playsInline autoPlay className="w-full rounded-xl bg-black aspect-video" />
+          </div>
+        )}
+
+        {/* Saved blob preview after stop */}
         <div className="grid gap-2">
           <div className="text-sm text-white/70">Preview</div>
           <video
-            ref={videoRef}
+            ref={previewRef}
             controls
             playsInline
             className="w-full rounded-xl bg-black aspect-video"
