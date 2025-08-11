@@ -2,62 +2,27 @@ import { Link } from "react-router-dom";
 import { Bookmark } from "lucide-react";
 import { useBookmarks } from "@/hooks/useBookmarks";
 
-/** Shape used when callers pass a single `instruction` prop */
-type Instruction = {
-  id: string;
-  title: string;
-  content?: string;
-  category?: string | null;
-  tags?: string[] | null;
-  is_public?: boolean | null;
-  created_by?: string | null;
-  created_at?: string;
-};
+export default function InstructionCard(props: any) {
+  // Normalize props (accept either {instruction} or individual fields)
+  const i = props.instruction
+    ? props.instruction
+    : {
+        id: props.id,
+        title: props.title,
+        category: props.category,
+        tags: props.tags,
+        is_public: props.isPublic,
+        content: props.preview, // used as preview text
+      };
 
-/**
- * Accepts EITHER individual props OR a single `{ instruction }` (legacy).
- */
-export type InstructionCardProps =
-  | {
-      id: string;
-      title: string;
-      category?: string | null;
-      tags?: string[] | null;
-      isPublic?: boolean;
-      preview?: string;
-      instruction?: never;
-    }
-  | {
-      instruction: Instruction; // <— allow legacy callers
-      id?: never;
-      title?: never;
-      category?: never;
-      tags?: never;
-      isPublic?: never;
-      preview?: never;
-    };
-
-export default function InstructionCard(props: InstructionCardProps) {
-  // Normalize props to a single object
-  const i: Instruction =
-    "instruction" in props
-      ? props.instruction
-      : {
-          id: props.id,
-          title: props.title,
-          category: props.category,
-          tags: props.tags,
-          is_public: props.isPublic,
-          content: props.preview, // used only as preview text
-        };
-
-  const id = i.id;
-  const title = i.title;
-  const category = i.category ?? null;
-  const tags = i.tags ?? null;
-  const isPublic = Boolean(i.is_public);
-  const preview =
-    "instruction" in props ? (i.content ?? "").slice(0, 160) : props.preview;
+  const id: string = i.id;
+  const title: string = i.title;
+  const category: string | null = i.category ?? null;
+  const tags: string[] | null = i.tags ?? null;
+  const isPublic: boolean = Boolean(i.is_public);
+  const preview: string | undefined = props.instruction
+    ? (i.content ?? "").slice(0, 160)
+    : props.preview;
 
   const { isBookmarked, toggle } = useBookmarks();
 
