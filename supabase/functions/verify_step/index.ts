@@ -7,11 +7,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
  */
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-1.5-flash";
-const REQUIRE_JWT = true; // keep true in production
+const REQUIRE_JWT = true; // keep true in prod
 
 /**
  * CORS
- * If you want to restrict, set ORIGIN to "https://aiyesgpt.vercel.app"
+ * Restrict to your prod origin if you like: e.g., "https://aiyesgpt.vercel.app"
  */
 const ORIGIN = "*";
 const CORS_HEADERS: Record<string, string> = {
@@ -95,25 +95,28 @@ async function callGeminiAnalyze(imageDataUrl: string, step: string, signal: Abo
 }
 
 export default async (req: Request) => {
-  // 1) CORS preflight
+  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // 2) Parse JSON early so we can allow unauthenticated ping
+  // Parse JSON early
   let body: any = {};
-  try {
-    body = await req.json();
-  } catch {
-    body = {};
-  }
+  try { body = await req.json(); } catch { body = {}; }
 
-  // 3) Unauthenticated ping path for quick health checks & debugging
+  // Unauthed ping (health check)
   if (body?.ping === true) {
     return json({ ok: true, model: GEMINI_MODEL });
   }
 
-  // 4) JWT (only for real verification calls)
+  // NEW: mock verification (bypasses Gemini) for quick end-to-end testing
+  if (body?.mockVerify === true) {
+    const confidence = typeof body.mockConfidence === "number" ? Math.max(0, Math.min(1, body.mockConfidence)) : 0.77;
+    const feedback = body.mockFeedback ?? "Mock verification path OK.";
+    return json({ confidence, feedback });
+  }
+
+  // JWT for real verify
   if (REQUIRE_JWT) {
     const auth = req.headers.get("authorization") || req.headers.get("Authorization");
     if (!auth || !auth.toLowerCase().startsWith("bearer ")) {
@@ -123,7 +126,7 @@ export default async (req: Request) => {
 
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-  // 5) Accept { image } or { frames }
+  // Accept { image } or { frames }
   const step = (body.instruction_step ?? "").toString().trim();
   let image: string | null = null;
   if (isDataUrlImage(body.image)) image = body.image;
@@ -137,37 +140,25 @@ export default async (req: Request) => {
     return json({ error: "Gemini key missing" }, 500);
   }
 
-  // 6) Retry + timeout (handles 429/503)
-  const maxAttempts = 3;
-  const baseDelay = 350;
+  // FASTER server behavior to avoid client 12s timeout:
+  const maxAttempts = 1;          // was 3
+  const perTryMs = 8000;          // was 10_000
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 10_000); // 10s per attempt
+    const to = setTimeout(() => ctrl.abort(), perTryMs);
 
     try {
       const r = await callGeminiAnalyze(image, step, ctrl.signal);
       clearTimeout(to);
 
-      if (r.ok) {
-        return json({ confidence: r.confidence, feedback: r.feedback });
-      }
+      if (r.ok) return json({ confidence: r.confidence, feedback: r.feedback });
 
-      if (r.status === 429 || r.status === 503) {
-        const backoff = baseDelay * attempt;
-        await new Promise((res) => setTimeout(res, backoff));
-        continue;
-      }
-
+      // With 1 attempt, we don’t back off; just return quickly
       return json({ error: "Gemini error", detail: r.body }, 502);
     } catch (e: any) {
       clearTimeout(to);
       if (e?.name === "AbortError") {
-        if (attempt < maxAttempts) {
-          const backoff = baseDelay * attempt;
-          await new Promise((res) => setTimeout(res, backoff));
-          continue;
-        }
         return json({ error: "timeout" }, 500);
       }
       return json({ error: "edge-failure", detail: String(e?.message ?? e) }, 500);
