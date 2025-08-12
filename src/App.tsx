@@ -1,7 +1,7 @@
 // Let TS know about the global injected by Vite (safe even if undefined)
 declare const __BUILD_TAG__: string | undefined;
 
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import AccountMenu from "@/components/AccountMenu";
 import { supabase } from "@/lib/supabase";
@@ -27,7 +27,6 @@ function TopLink({ to, children }: { to: string; children: React.ReactNode }) {
 export default function App() {
   const [funcStatus, setFuncStatus] = useState<"unknown" | "ok" | "fail">("unknown");
   const [authReady, setAuthReady] = useState(false);
-  const location = useLocation();
   const navigate = useNavigate();
 
   // Page theming
@@ -36,7 +35,7 @@ export default function App() {
     return () => document.body.classList.remove("bg-app");
   }, []);
 
-  // 1) Handle Supabase magic-link callback: exchange ?code=... for a session
+  // Handle Supabase magic-link callback: exchange ?code=... for a session
   useEffect(() => {
     let active = true;
     (async () => {
@@ -44,30 +43,24 @@ export default function App() {
         const url = new URL(window.location.href);
         const code = url.searchParams.get("code");
         const errorDesc = url.searchParams.get("error_description");
-        // Optional: allow deep-link target via ?next=/student/browse
         const next = url.searchParams.get("next");
 
-        if (errorDesc) {
-          console.warn("[auth] error_description:", errorDesc);
-        }
+        if (errorDesc) console.warn("[auth] error_description:", errorDesc);
 
         if (code) {
-          // This will set the session (and refresh token) in supabase-js
-          const { error } = await supabase.auth.exchangeCodeForSession({ code });
-          if (error) {
-            console.error("[auth] exchangeCodeForSession error:", error);
-          }
-          // Clean the URL (remove code/error params) and optionally route to next
+          // Some versions expect a string parameter, not an object
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) console.error("[auth] exchangeCodeForSession error:", error);
+
+          // Clean URL and optionally navigate
           url.searchParams.delete("code");
           url.searchParams.delete("error");
           url.searchParams.delete("error_description");
           if (next) {
             url.searchParams.delete("next");
-            // Use client-side navigation to avoid full reload
             if (active) navigate(next, { replace: true });
             return;
           }
-          // Replace current URL without reloading
           window.history.replaceState({}, "", url.toString());
         }
       } finally {
@@ -79,7 +72,7 @@ export default function App() {
     };
   }, [navigate]);
 
-  // 2) Ping the verify_step function once on mount (after auth is ready)
+  // Ping the verify_step function once on mount (after auth is ready)
   useEffect(() => {
     if (!authReady) return;
     const url =
