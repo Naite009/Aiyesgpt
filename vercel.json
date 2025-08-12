@@ -1,5 +1,11 @@
 {
+  "functions": {
+    "api/verify_step.ts": {
+      "runtime": "edge"
+    }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/" }
   ]
 }
