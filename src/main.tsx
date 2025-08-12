@@ -1,70 +1,42 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, redirect } from "react-router-dom";
 import App from "./App";
-
-// Layouts
-import StudentLayout from "./layouts/StudentLayout";
-import TeacherLayout from "./layouts/TeacherLayout";
+import "./index.css";
 
 // Pages
-import Browse from "./pages/Browse";
-import Favorites from "./pages/Favorites";
-import Create from "./pages/Create";
-import Studio from "./pages/Studio";
-import Lessons from "./pages/Lessons";
-import Guided from "./pages/Guided";
-import TestMode from "./pages/TestMode";
+import Browse from "@/pages/Browse";
+import Favorites from "@/pages/Favorites";
+import Create from "@/pages/Create";
+import Guided from "@/pages/Guided";
+import Lessons from "@/pages/Lessons";
+import Studio from "@/pages/Studio";
+import TestMode from "@/pages/TestMode";
+import AuthCallback from "@/pages/AuthCallback";
 
-import "./index.css";
+const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <App />,
+    children: [
+      { index: true, loader: () => redirect("/student/browse") },
+      // Student
+      { path: "student/browse", element: <Browse /> },
+      { path: "student/guided/:id", element: <Guided /> },
+      { path: "student/test/:id", element: <TestMode /> },
+      // Teacher
+      { path: "teacher/create", element: <Create /> },
+      // Media
+      { path: "studio", element: <Studio /> },
+      { path: "lessons", element: <Lessons /> },
+      // Auth callback
+      { path: "auth/callback", element: <AuthCallback /> },
+    ],
+  },
+]);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<App />}>
-          {/* Default → student browse */}
-          <Route index element={<Navigate to="/student/browse" replace />} />
-
-          {/* ===== Preferred layout routes ===== */}
-          <Route path="student" element={<StudentLayout />}>
-            <Route index element={<Navigate to="browse" replace />} />
-            <Route path="browse" element={<Browse />} />
-            <Route path="favorites" element={<Favorites />} />
-            <Route path="guided/:id" element={<Guided />} />
-            <Route path="test/:id" element={<TestMode />} />
-          </Route>
-
-          <Route path="teacher" element={<TeacherLayout />}>
-            <Route index element={<Navigate to="create" replace />} />
-            <Route path="create" element={<Create />} />
-            <Route path="studio" element={<Studio />} />
-            <Route path="lessons" element={<Lessons />} />
-          </Route>
-
-          {/* ===== Direct compatibility routes (work even if layouts break) ===== */}
-          <Route path="student/browse" element={<Browse />} />
-          <Route path="student/favorites" element={<Favorites />} />
-          <Route path="student/guided/:id" element={<Guided />} />
-          <Route path="student/test/:id" element={<TestMode />} />
-
-          <Route path="teacher/create" element={<Create />} />
-          <Route path="teacher/studio" element={<Studio />} />
-          <Route path="teacher/lessons" element={<Lessons />} />
-
-          {/* ===== Legacy support ===== */}
-          <Route path="browse" element={<Navigate to="/student/browse" replace />} />
-          <Route path="favorites" element={<Navigate to="/student/favorites" replace />} />
-          <Route path="guided/:id" element={<Guided />} />
-          <Route path="test/:id" element={<TestMode />} />
-          <Route path="create" element={<Navigate to="/teacher/create" replace />} />
-          <Route path="studio" element={<Navigate to="/teacher/studio" replace />} />
-          <Route path="lessons" element={<Navigate to="/teacher/lessons" replace />} />
-
-          {/* 404 */}
-          <Route path="*" element={<div className="card p-4">404 · Not Found</div>} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <RouterProvider router={router} />
   </React.StrictMode>
 );

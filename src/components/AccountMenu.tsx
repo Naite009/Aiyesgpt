@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
+function getSiteOrigin() {
+  // Prefer explicit env in prod to avoid email clients mangling URLs
+  const envUrl = import.meta.env.VITE_SITE_URL as string | undefined;
+  if (envUrl) return envUrl.replace(/\/+$/, "");
+  if (typeof window !== "undefined") return window.location.origin;
+  return "";
+}
+
 export default function AccountMenu() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -32,10 +40,8 @@ export default function AccountMenu() {
     };
   }, []);
 
-  const redirectTo =
-    (import.meta.env.VITE_SITE_URL as string | undefined) ||
-    // fallback to current origin (ensure this origin is allowed in Supabase Auth settings)
-    (typeof window !== "undefined" ? window.location.origin : undefined);
+  const origin = getSiteOrigin();
+  const magicLinkRedirect = `${origin}/auth/callback?next=/student/browse`;
 
   async function sendMagicLink() {
     setMessage(null);
@@ -49,7 +55,7 @@ export default function AccountMenu() {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
-        options: redirectTo ? { emailRedirectTo: redirectTo } : undefined,
+        options: { emailRedirectTo: magicLinkRedirect },
       });
       if (error) {
         setError(error.message);
@@ -68,7 +74,7 @@ export default function AccountMenu() {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: redirectTo ? { redirectTo } : undefined,
+        options: { redirectTo: magicLinkRedirect },
       });
       if (error) setError(error.message);
     } catch (e: any) {
