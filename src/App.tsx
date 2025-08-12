@@ -1,9 +1,10 @@
 // Let TS know about the global injected by Vite (safe even if undefined)
 declare const __BUILD_TAG__: string | undefined;
 
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import AccountMenu from "@/components/AccountMenu";
+import { supabase } from "@/lib/supabase";
 
 function TopLink({ to, children }: { to: string; children: React.ReactNode }) {
   return (
@@ -24,17 +25,63 @@ function TopLink({ to, children }: { to: string; children: React.ReactNode }) {
 }
 
 export default function App() {
-  const [funcStatus, setFuncStatus] = useState<"unknown" | "ok" | "fail">(
-    "unknown"
-  );
+  const [funcStatus, setFuncStatus] = useState<"unknown" | "ok" | "fail">("unknown");
+  const [authReady, setAuthReady] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
 
+  // Page theming
   useEffect(() => {
     document.body.classList.add("bg-app");
     return () => document.body.classList.remove("bg-app");
   }, []);
 
-  // Ping the verify_step function once on mount
+  // 1) Handle Supabase magic-link callback: exchange ?code=... for a session
   useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get("code");
+        const errorDesc = url.searchParams.get("error_description");
+        // Optional: allow deep-link target via ?next=/student/browse
+        const next = url.searchParams.get("next");
+
+        if (errorDesc) {
+          console.warn("[auth] error_description:", errorDesc);
+        }
+
+        if (code) {
+          // This will set the session (and refresh token) in supabase-js
+          const { error } = await supabase.auth.exchangeCodeForSession({ code });
+          if (error) {
+            console.error("[auth] exchangeCodeForSession error:", error);
+          }
+          // Clean the URL (remove code/error params) and optionally route to next
+          url.searchParams.delete("code");
+          url.searchParams.delete("error");
+          url.searchParams.delete("error_description");
+          if (next) {
+            url.searchParams.delete("next");
+            // Use client-side navigation to avoid full reload
+            if (active) navigate(next, { replace: true });
+            return;
+          }
+          // Replace current URL without reloading
+          window.history.replaceState({}, "", url.toString());
+        }
+      } finally {
+        if (active) setAuthReady(true);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [navigate]);
+
+  // 2) Ping the verify_step function once on mount (after auth is ready)
+  useEffect(() => {
+    if (!authReady) return;
     const url =
       import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
       import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
@@ -50,7 +97,7 @@ export default function App() {
     })
       .then((r) => setFuncStatus(r.ok ? "ok" : "fail"))
       .catch(() => setFuncStatus("fail"));
-  }, []);
+  }, [authReady]);
 
   // Prefer injected build tag; fallback to env; else "dev"
   const buildTag =
@@ -63,9 +110,7 @@ export default function App() {
       {/* Header */}
       <header className="sticky top-0 z-30 backdrop-blur bg-black/40 border-b border-white/10">
         <div className="mx-auto max-w-6xl w-full px-4 h-14 flex items-center gap-3">
-          <Link to="/" className="font-semibold text-white mr-2">
-            Aiyes
-          </Link>
+          <Link to="/" className="font-semibold text-white mr-2">Aiyes</Link>
           <nav className="flex items-center gap-1">
             <TopLink to="/student/browse">Student</TopLink>
             <TopLink to="/teacher/create">Teacher</TopLink>
