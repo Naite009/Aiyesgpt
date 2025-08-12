@@ -29,30 +29,28 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const navigate = useNavigate();
 
-  // Page theming
+  // Theme
   useEffect(() => {
     document.body.classList.add("bg-app");
     return () => document.body.classList.remove("bg-app");
   }, []);
 
-  // Handle Supabase magic-link callback: exchange ?code=... for a session
+  // Handle Supabase auth callback (magic link and OAuth)
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         const url = new URL(window.location.href);
         const code = url.searchParams.get("code");
-        const errorDesc = url.searchParams.get("error_description");
         const next = url.searchParams.get("next");
-
+        const errorDesc = url.searchParams.get("error_description");
         if (errorDesc) console.warn("[auth] error_description:", errorDesc);
 
         if (code) {
-          // Some versions expect a string parameter, not an object
+          // OAuth/PKCE flow (?code=...)
           const { error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) console.error("[auth] exchangeCodeForSession error:", error);
-
-          // Clean URL and optionally navigate
+          // Clean query params
           url.searchParams.delete("code");
           url.searchParams.delete("error");
           url.searchParams.delete("error_description");
@@ -62,6 +60,14 @@ export default function App() {
             return;
           }
           window.history.replaceState({}, "", url.toString());
+        } else if (window.location.hash.includes("access_token")) {
+          // Magic link flow (#access_token=...&refresh_token=...)
+          // This parses the hash and stores the session.
+          const { error } = await supabase.auth.getSessionFromUrl({ storeSession: true });
+          if (error) console.error("[auth] getSessionFromUrl error:", error);
+          // Remove the hash without reloading
+          const clean = window.location.origin + window.location.pathname + window.location.search;
+          window.history.replaceState({}, "", clean);
         }
       } finally {
         if (active) setAuthReady(true);
@@ -72,7 +78,7 @@ export default function App() {
     };
   }, [navigate]);
 
-  // Ping the verify_step function once on mount (after auth is ready)
+  // Ping verify_step after auth settle
   useEffect(() => {
     if (!authReady) return;
     const url =
@@ -92,7 +98,7 @@ export default function App() {
       .catch(() => setFuncStatus("fail"));
   }, [authReady]);
 
-  // Prefer injected build tag; fallback to env; else "dev"
+  // Build tag
   const buildTag =
     (typeof __BUILD_TAG__ !== "undefined" && __BUILD_TAG__) ||
     (import.meta.env?.VITE_BUILD_TAG as string | undefined) ||
@@ -114,7 +120,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main content */}
+      {/* Main */}
       <main className="mx-auto max-w-6xl w-full px-4 py-6 flex-1">
         <Outlet />
       </main>
@@ -126,15 +132,9 @@ export default function App() {
         </span>
         <span className="flex items-center gap-1">
           <span>Function:</span>
-          {funcStatus === "unknown" && (
-            <span className="w-2 h-2 rounded-full bg-gray-400 inline-block" />
-          )}
-          {funcStatus === "ok" && (
-            <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />
-          )}
-          {funcStatus === "fail" && (
-            <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
-          )}
+          {funcStatus === "unknown" && <span className="w-2 h-2 rounded-full bg-gray-400 inline-block" />}
+          {funcStatus === "ok" && <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />}
+          {funcStatus === "fail" && <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />}
         </span>
       </footer>
     </div>
