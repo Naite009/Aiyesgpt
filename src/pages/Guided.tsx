@@ -18,15 +18,14 @@ function dataURLFromVideoFrame(
   canvas: HTMLCanvasElement,
   quality = 0.6
 ): string {
-  // Downscale to max 640x480 to keep payloads small & fast
+  // Downscale to max 640x480 for smaller/faster payloads
   const vw = video.videoWidth || 640;
   const vh = video.videoHeight || 480;
   const maxW = 640;
   const maxH = 480;
-  let w = vw, h = vh;
-  const scale = Math.min(maxW / w, maxH / h, 1);
-  w = Math.max(1, Math.floor(w * scale));
-  h = Math.max(1, Math.floor(h * scale));
+  const scale = Math.min(maxW / vw, maxH / vh, 1);
+  const w = Math.max(1, Math.floor(vw * scale));
+  const h = Math.max(1, Math.floor(vh * scale));
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
@@ -41,7 +40,14 @@ export default function Guided() {
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<{ confidence: number; feedback: string } | null>(null);
+
+  // Debug & status
   const [isAuthed, setIsAuthed] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [funcUrl, setFuncUrl] = useState<string>("");
+  const [lastStatus, setLastStatus] = useState<number | null>(null);
+  const [lastBody, setLastBody] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -53,14 +59,22 @@ export default function Guided() {
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
       setIsAuthed(!!data.session);
+      setUserEmail(data.session?.user?.email ?? null);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       setIsAuthed(!!session);
+      setUserEmail(session?.user?.email ?? null);
     });
-    return () => {
-      sub.subscription.unsubscribe();
-      mounted = false;
-    };
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Detect function URL once
+  useEffect(() => {
+    const url =
+      (import.meta as any).env?.VITE_VERIFY_STEP_FUNCTION_URL ||
+      (import.meta as any).env?.VITE_SUPABASE_EDGE_VERIFY_URL ||
+      "";
+    setFuncUrl(url || "");
   }, []);
 
   // Load instruction
@@ -108,7 +122,6 @@ export default function Guided() {
   }, []);
 
   async function getAuthHeader(): Promise<Record<string, string>> {
-    // For Edge Function with "Verify JWT" on
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
     if (!token) throw new Error("Please sign in to verify steps.");
@@ -116,23 +129,35 @@ export default function Guided() {
   }
 
   async function callVerify(payload: any) {
+    if (!funcUrl) throw new Error("Verify function URL not configured.");
     const headers = await getAuthHeader();
-    const url =
-      import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
-      import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
-      "";
-    if (!url) throw new Error("Verify function URL not configured.");
 
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const text = await r.text();
-    if (!r.ok) {
-      throw new Error(`verify_step failed: ${r.status} – ${text}`);
+    // Helper to do one round-trip
+    const once = async () => {
+      const r = await fetch(funcUrl, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const text = await r.text();
+      setLastStatus(r.status);
+      setLastBody(text);
+      if (!r.ok) {
+        throw new Error(`verify_step failed: ${r.status} – ${text}`);
+      }
+      return JSON.parse(text);
+    };
+
+    try {
+      return await once();
+    } catch (e: any) {
+      // Auto-retry once on 502 (Gemini overloaded)
+      if (String(e?.message || "").includes("verify_step failed: 502")) {
+        await new Promise((res) => setTimeout(res, 400));
+        return await once();
+      }
+      throw e;
     }
-    return JSON.parse(text);
   }
 
   async function verifySingle() {
@@ -145,6 +170,8 @@ export default function Guided() {
     setBusy(true);
     setErrorMsg(null);
     setResult(null);
+    setLastStatus(null);
+    setLastBody(null);
     try {
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
       const image = dataURLFromVideoFrame(video, canvas, 0.7);
@@ -174,6 +201,8 @@ export default function Guided() {
     setBusy(true);
     setErrorMsg(null);
     setResult(null);
+    setLastStatus(null);
+    setLastBody(null);
 
     try {
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
@@ -238,6 +267,14 @@ export default function Guided() {
             <button className="btn btn-outline" disabled={busy || !isAuthed} onClick={verifyBurst}>
               {busy ? "Verifying…" : "Verify (burst)"}
             </button>
+
+            <button
+              className="btn btn-outline ml-auto"
+              type="button"
+              onClick={() => setShowDebug((s) => !s)}
+            >
+              {showDebug ? "Hide debug" : "Show debug"}
+            </button>
           </div>
         </div>
 
@@ -264,6 +301,22 @@ export default function Guided() {
               </div>
             )}
           </div>
+
+          {showDebug && (
+            <div className="card p-4 text-xs space-y-2">
+              <div className="font-medium">Debug</div>
+              <div>Signed in: <span className="font-mono">{isAuthed ? "yes" : "no"}</span></div>
+              <div>Email: <span className="font-mono">{userEmail ?? "—"}</span></div>
+              <div>Function URL present: <span className="font-mono">{funcUrl ? "yes" : "no"}</span></div>
+              <div>Function URL: <span className="font-mono break-all">{funcUrl || "—"}</span></div>
+              <div>Last HTTP status: <span className="font-mono">{lastStatus ?? "—"}</span></div>
+              <div>Last body:</div>
+              <pre className="bg-black/40 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">
+{lastBody ?? "—"}
+              </pre>
+            </div>
+          )}
+
           <div className="text-xs text-white/40">
             Tip: ensure good lighting and keep steady during burst capture.
           </div>
