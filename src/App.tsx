@@ -24,18 +24,33 @@ function TopLink({ to, children }: { to: string; children: React.ReactNode }) {
   );
 }
 
+/** Parse URL fragment (#access_token=...&refresh_token=...) into a map */
+function parseHashParams(hash: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const q = hash.startsWith("#") ? hash.slice(1) : hash;
+  for (const pair of q.split("&")) {
+    if (!pair) continue;
+    const [k, v] = pair.split("=");
+    if (!k) continue;
+    out[decodeURIComponent(k)] = decodeURIComponent(v ?? "");
+  }
+  return out;
+}
+
 export default function App() {
   const [funcStatus, setFuncStatus] = useState<"unknown" | "ok" | "fail">("unknown");
   const [authReady, setAuthReady] = useState(false);
   const navigate = useNavigate();
 
-  // Theme
+  // Page theming
   useEffect(() => {
     document.body.classList.add("bg-app");
     return () => document.body.classList.remove("bg-app");
   }, []);
 
-  // Handle Supabase auth callback (magic link and OAuth)
+  // Handle Supabase auth callback:
+  // - OAuth/PKCE:   ?code=...
+  // - Magic Link:   #access_token=...&refresh_token=...
   useEffect(() => {
     let active = true;
     (async () => {
@@ -47,10 +62,11 @@ export default function App() {
         if (errorDesc) console.warn("[auth] error_description:", errorDesc);
 
         if (code) {
-          // OAuth/PKCE flow (?code=...)
+          // Some versions of supabase-js expect a string arg here
           const { error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) console.error("[auth] exchangeCodeForSession error:", error);
-          // Clean query params
+
+          // Clean query params and optionally navigate
           url.searchParams.delete("code");
           url.searchParams.delete("error");
           url.searchParams.delete("error_description");
@@ -61,10 +77,21 @@ export default function App() {
           }
           window.history.replaceState({}, "", url.toString());
         } else if (window.location.hash.includes("access_token")) {
-          // Magic link flow (#access_token=...&refresh_token=...)
-          // This parses the hash and stores the session.
-          const { error } = await supabase.auth.getSessionFromUrl({ storeSession: true });
-          if (error) console.error("[auth] getSessionFromUrl error:", error);
+          // Magic link flow: parse tokens from hash
+          const params = parseHashParams(window.location.hash);
+          const access_token = params["access_token"];
+          const refresh_token = params["refresh_token"];
+
+          if (access_token && refresh_token) {
+            const { error } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            } as any); // 'any' to appease older type defs
+            if (error) console.error("[auth] setSession error:", error);
+          } else {
+            console.warn("[auth] hash present but missing tokens");
+          }
+
           // Remove the hash without reloading
           const clean = window.location.origin + window.location.pathname + window.location.search;
           window.history.replaceState({}, "", clean);
@@ -78,7 +105,7 @@ export default function App() {
     };
   }, [navigate]);
 
-  // Ping verify_step after auth settle
+  // Ping verify_step after auth settles
   useEffect(() => {
     if (!authReady) return;
     const url =
@@ -98,7 +125,7 @@ export default function App() {
       .catch(() => setFuncStatus("fail"));
   }, [authReady]);
 
-  // Build tag
+  // Prefer injected build tag; fallback to env; else "dev"
   const buildTag =
     (typeof __BUILD_TAG__ !== "undefined" && __BUILD_TAG__) ||
     (import.meta.env?.VITE_BUILD_TAG as string | undefined) ||
@@ -120,7 +147,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main */}
+      {/* Main content */}
       <main className="mx-auto max-w-6xl w-full px-4 py-6 flex-1">
         <Outlet />
       </main>
