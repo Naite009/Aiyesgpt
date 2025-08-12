@@ -1,7 +1,0 @@
-{
-  "functions": {
-    "api/verify_step.ts": {
-      "runtime": "edge"
-    }
-  }
-}

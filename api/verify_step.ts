@@ -20,10 +20,8 @@ export default async function handler(req: Request): Promise<Response> {
   let body: any = {};
   try { body = await req.json(); } catch { body = {}; }
 
-  // Health check
   if (body?.ping === true) return json({ ok: true, model: "edge-stub" });
 
-  // Mock verify
   if (body?.mockVerify === true) {
     const c = typeof body.mockConfidence === "number" ? body.mockConfidence : 0.9;
     const f = body.mockFeedback ?? "Mock verification OK.";
