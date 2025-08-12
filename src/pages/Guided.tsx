@@ -16,7 +16,7 @@ type Instruction = {
 function dataURLFromVideoFrame(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
-  quality = 0.6
+  quality = 0.7
 ): string {
   const w = video.videoWidth || 640;
   const h = video.videoHeight || 480;
@@ -94,11 +94,30 @@ export default function Guided() {
   }, []);
 
   async function getAuthHeader(): Promise<Record<string, string>> {
-    // Use the signed-in user's access token. (Works with verify_jwt on)
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
     if (!token) throw new Error("Please sign in to verify steps.");
     return { Authorization: `Bearer ${token}` };
+  }
+
+  async function callVerify(payload: any) {
+    const headers = await getAuthHeader();
+    const url =
+      import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
+      import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
+      "";
+    if (!url) throw new Error("Verify function URL not configured.");
+
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      throw new Error(`verify_step failed: ${r.status} – ${text}`);
+    }
+    return JSON.parse(text);
   }
 
   async function verifySingle() {
@@ -112,31 +131,13 @@ export default function Guided() {
     setErrorMsg(null);
     setResult(null);
     try {
-      const headers = await getAuthHeader();
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
-      const image = dataURLFromVideoFrame(video, canvas, 0.7);
+      const image = dataURLFromVideoFrame(video, canvas, 0.75);
 
-      const url =
-        import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
-        import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
-        "";
-      if (!url) throw new Error("Verify function URL not configured.");
-
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image,
-          instruction_step: instruction.title || "current step",
-        }),
+      const data = await callVerify({
+        image,
+        instruction_step: instruction.title || "current step",
       });
-
-      const text = await r.text();
-      if (!r.ok) {
-        setErrorMsg(`verify_step failed: ${r.status} – ${text}`);
-        return;
-      }
-      const data = JSON.parse(text);
       setResult({ confidence: Number(data.confidence || 0), feedback: String(data.feedback || "") });
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Verify failed.");
@@ -157,11 +158,10 @@ export default function Guided() {
     setResult(null);
 
     try {
-      const headers = await getAuthHeader();
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
       // capture 4 frames over ~600ms
       const frames: string[] = [];
-      const captureOnce = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.6));
+      const captureOnce = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.7));
 
       captureOnce();
       await new Promise((r) => setTimeout(r, 200));
@@ -171,34 +171,15 @@ export default function Guided() {
       await new Promise((r) => setTimeout(r, 200));
       captureOnce();
 
-      const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1000);
-      if (!valid.length) {
-        setErrorMsg("No valid frames captured. Try again with better lighting.");
-        setBusy(false);
-        return;
-      }
+      // choose the "best" frame by longest dataURL length (proxy for detail)
+      const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1200);
+      if (!valid.length) throw new Error("No valid frames captured. Try again in better lighting.");
+      const best = valid.sort((a, b) => b.length - a.length)[0];
 
-      const url =
-        import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
-        import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
-        "";
-      if (!url) throw new Error("Verify function URL not configured.");
-
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          frames: valid.slice(0, 4),
-          instruction_step: instruction.title || "current step",
-        }),
+      const data = await callVerify({
+        image: best, // <— send single image since the function requires it
+        instruction_step: instruction.title || "current step",
       });
-
-      const text = await r.text();
-      if (!r.ok) {
-        setErrorMsg(`verify_step failed: ${r.status} – ${text}`);
-        return;
-      }
-      const data = JSON.parse(text);
       setResult({ confidence: Number(data.confidence || 0), feedback: String(data.feedback || "") });
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Burst verify failed.");
@@ -218,11 +199,7 @@ export default function Guided() {
         <div className="text-white/60">Loading instruction…</div>
       )}
 
-      {!isAuthed && (
-        <div className="text-amber-300">
-          Please sign in to use AI verification.
-        </div>
-      )}
+      {!isAuthed && <div className="text-amber-300">Please sign in to use AI verification.</div>}
 
       <div className="grid md:grid-cols-[1fr,1fr] gap-4">
         <div>
