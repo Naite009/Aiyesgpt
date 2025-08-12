@@ -1,247 +1,237 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
-import { useToast } from "@/components/ToastProvider";
-import { verifyStepImage, verifyStepBurst } from "@/services/ai";
 
-type Instruction = { id: string; title: string; content: string };
-type LessonMin = { id: string; title: string; video_url: string | null; video_path: string | null; created_at: string };
+type Instruction = {
+  id: string;
+  title: string;
+  content?: string;
+  category?: string | null;
+  tags?: string[] | null;
+  is_public?: boolean | null;
+  created_by?: string | null;
+  created_at?: string;
+};
 
-const EDGE_URL = import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL || import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL || "";
+function dataURLFromVideoFrame(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  quality = 0.6
+): string {
+  const w = video.videoWidth || 640;
+  const h = video.videoHeight || 480;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(video, 0, 0, w, h);
+  // JPEG keeps size small for the function
+  return canvas.toDataURL("image/jpeg", quality);
+}
 
 export default function Guided() {
   const { id } = useParams<{ id: string }>();
-  const { notify } = useToast();
+  const [instruction, setInstruction] = useState<Instruction | null>(null);
 
-  const [ins, setIns] = useState<Instruction | null>(null);
-  const [steps, setSteps] = useState<string[]>([]);
-  const [idx, setIdx] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ confidence?: number; feedback?: string; error?: string } | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [result, setResult] = useState<{ confidence: number; feedback: string } | null>(null);
 
-  // lesson watch
-  const [lesson, setLesson] = useState<LessonMin | null>(null);
-  const [lessonUrl, setLessonUrl] = useState<string | null>(null);
-  const [showLesson, setShowLesson] = useState(false);
-
-  // camera
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Load instruction + steps
+  // Load instruction
   useEffect(() => {
     let active = true;
     (async () => {
+      if (!id) return;
       const { data, error } = await supabase
         .from("instructions")
-        .select("id,title,content")
+        .select("*")
         .eq("id", id)
         .single();
       if (!active) return;
-      if (error || !data) {
-        setIns(null);
-        return;
-      }
-      const insRow = data as Instruction;
-      setIns(insRow);
-      setSteps(parseSteps(insRow.content));
-    })();
-    return () => { active = false; };
-  }, [id]);
-
-  // Load latest lesson linked
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      const { data, error } = await supabase
-        .from("lessons")
-        .select("id,title,video_url,video_path,created_at")
-        .eq("instruction_id", id)
-        .order("created_at", { ascending: false })
-        .limit(1);
-      if (!active) return;
-      if (!error && data && data.length) setLesson(data[0] as LessonMin);
-    })();
-    return () => { active = false; };
-  }, [id]);
-
-  // Sign lesson video if private
-  useEffect(() => {
-    (async () => {
-      if (!lesson) return setLessonUrl(null);
-      if (lesson.video_path) {
-        const { data } = await supabase.storage.from("lessons").createSignedUrl(lesson.video_path, 3600);
-        setLessonUrl(data?.signedUrl ?? null);
-      } else {
-        setLessonUrl(lesson.video_url);
-      }
-    })();
-  }, [lesson]);
-
-  // Camera setup
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        if (!mounted) return;
-        setStream(s);
-        if (videoRef.current) {
-          videoRef.current.srcObject = s;
-          videoRef.current.onloadedmetadata = () => videoRef.current?.play().catch(() => {});
-        }
-      } catch {}
+      if (error) setErrorMsg(error.message);
+      else setInstruction(data as Instruction);
     })();
     return () => {
-      mounted = false;
-      stream?.getTracks().forEach((t) => t.stop());
+      active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Start camera preview
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        if (cancelled) return;
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+      } catch (e: any) {
+        setErrorMsg(e?.message ?? "Camera permission denied.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+    };
   }, []);
 
-  const step = steps[idx] ?? "";
-  const canPrev = idx > 0;
-  const canNext = idx < steps.length - 1;
-
-  async function captureFrameBase64(mime = "image/jpeg", quality = 0.92) {
-    if (!videoRef.current) throw new Error("No camera");
-    const video = videoRef.current;
-    const canvas = document.createElement("canvas");
-    const w = video.videoWidth || 1280;
-    const h = video.videoHeight || 720;
-    canvas.width = w; canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas 2D not supported");
-    ctx.drawImage(video, 0, 0, w, h);
-    return canvas.toDataURL(mime, quality);
-  }
-
-  async function captureBurst(n = 10, gapMs = 120) {
-    const frames: string[] = [];
-    for (let k = 0; k < n; k++) {
-      const img = await captureFrameBase64();
-      frames.push(img);
-      if (k < n - 1) await new Promise((r) => setTimeout(r, gapMs));
-    }
-    return frames;
-  }
-
   async function verifySingle() {
+    if (!instruction) return;
+    const video = videoRef.current;
+    if (!video) {
+      setErrorMsg("Camera not ready.");
+      return;
+    }
+    setBusy(true);
+    setErrorMsg(null);
     setResult(null);
     try {
-      setBusy(true);
-      if (!EDGE_URL) throw new Error("Verify endpoint not configured.");
-      const img = await captureFrameBase64();
-      const r = await verifyStepImage({ imageBase64: img, stepText: step });
-      setResult({ confidence: r.confidence, feedback: r.feedback });
-      if (r.confidence >= 0.85 && canNext) setIdx((x) => x + 1);
+      const canvas = (canvasRef.current ||= document.createElement("canvas"));
+      const image = dataURLFromVideoFrame(video, canvas, 0.7);
+
+      const url =
+        import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
+        import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
+        "";
+      if (!url) throw new Error("Verify function URL not configured.");
+
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image,
+          instruction_step: instruction.title || "current step",
+        }),
+      });
+
+      const text = await r.text();
+      if (!r.ok) {
+        setErrorMsg(`verify_step failed: ${r.status} – ${text}`);
+        return;
+      }
+      const data = JSON.parse(text);
+      setResult({ confidence: Number(data.confidence || 0), feedback: String(data.feedback || "") });
     } catch (e: any) {
-      setResult({ error: e?.message ?? "Verify failed" });
+      setErrorMsg(e?.message ?? "Verify failed.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function verifyBurstClick() {
+  async function verifyBurst() {
+    if (!instruction) return;
+    const video = videoRef.current;
+    if (!video) {
+      setErrorMsg("Camera not ready.");
+      return;
+    }
+    setBusy(true);
+    setErrorMsg(null);
     setResult(null);
+
     try {
-      setBusy(true);
-      if (!EDGE_URL) throw new Error("Verify endpoint not configured.");
-      const frames = await captureBurst(10, 120);
-      const r = await verifyStepBurst({ frames, stepText: step });
-      setResult({ confidence: r.confidence, feedback: r.feedback });
-      if (r.confidence >= 0.85 && canNext) setIdx((x) => x + 1);
+      const canvas = (canvasRef.current ||= document.createElement("canvas"));
+      // capture 4 frames over ~600ms
+      const frames: string[] = [];
+      const captureOnce = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.6));
+
+      captureOnce();
+      await new Promise((r) => setTimeout(r, 200));
+      captureOnce();
+      await new Promise((r) => setTimeout(r, 200));
+      captureOnce();
+      await new Promise((r) => setTimeout(r, 200));
+      captureOnce();
+
+      // Filter obviously bad frames (tiny data URLs)
+      const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1000);
+      if (!valid.length) {
+        setErrorMsg("No valid frames captured. Try again with better lighting.");
+        setBusy(false);
+        return;
+      }
+
+      const url =
+        import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL ||
+        import.meta.env.VITE_SUPABASE_EDGE_VERIFY_URL ||
+        "";
+      if (!url) throw new Error("Verify function URL not configured.");
+
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          frames: valid.slice(0, 4),
+          instruction_step: instruction.title || "current step",
+        }),
+      });
+
+      const text = await r.text();
+      if (!r.ok) {
+        // 400 usually means the function saw "bad frames" – surface server message
+        setErrorMsg(`verify_step failed: ${r.status} – ${text}`);
+        return;
+      }
+      const data = JSON.parse(text);
+      setResult({ confidence: Number(data.confidence || 0), feedback: String(data.feedback || "") });
     } catch (e: any) {
-      setResult({ error: e?.message ?? "Verify failed" });
+      setErrorMsg(e?.message ?? "Burst verify failed.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="grid gap-4">
-      {!EDGE_URL && (
-        <div className="card p-3 text-amber-300/90">
-          Verify endpoint URL not set. Define <code>VITE_VERIFY_STEP_FUNCTION_URL</code> in your Vercel env.
-        </div>
+    <div className="space-y-4 text-white">
+      <h1 className="text-xl font-semibold">Guided Mode</h1>
+      {instruction ? (
+        <div className="text-white/80">Following: <span className="font-medium">{instruction.title}</span></div>
+      ) : (
+        <div className="text-white/60">Loading instruction…</div>
       )}
 
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">{ins?.title ?? "Guided Mode"}</h1>
-        {lessonUrl && (
-          <button className="btn btn-outline" onClick={() => setShowLesson(true)}>
-            Watch Lesson
-          </button>
-        )}
-      </div>
+      {/* Live preview */}
+      <div className="grid md:grid-cols-[1fr,1fr] gap-4">
+        <div>
+          <div className="aspect-video bg-black/50 rounded-xl overflow-hidden border border-white/10">
+            <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn btn-primary" disabled={busy} onClick={verifySingle}>
+              {busy ? "Verifying…" : "Verify (single)"}
+            </button>
+            <button className="btn btn-outline" disabled={busy} onClick={verifyBurst}>
+              {busy ? "Verifying…" : "Verify (burst)"}
+            </button>
+          </div>
+        </div>
 
-      {steps.length === 0 ? (
-        <div className="card p-4 text-white/70">No steps found in this instruction.</div>
-      ) : (
-        <>
-          <div className="card p-4 grid gap-3">
-            <div className="text-sm text-white/60">Step {idx + 1} of {steps.length}</div>
-            <div className="text-lg">{step}</div>
-
-            <div className="flex flex-wrap gap-2">
-              <button className="btn btn-outline" disabled={!canPrev} onClick={() => setIdx((x) => x - 1)}>‹ Prev</button>
-              <button className="btn btn-outline" disabled={!canNext} onClick={() => setIdx((x) => x + 1)}>Next ›</button>
-              <button className="btn btn-primary" onClick={verifySingle} disabled={busy || !EDGE_URL}>
-                {busy ? "Verifying…" : "Verify (single)"}
-              </button>
-              <button className="btn btn-outline" onClick={verifyBurstClick} disabled={busy || !EDGE_URL}>
-                Verify (burst)
-              </button>
-            </div>
-
-            {/* Inline result panel */}
+        <div className="space-y-3">
+          <div className="card p-4">
+            <h2 className="font-medium mb-2">Result</h2>
+            {!result && !errorMsg && <div className="text-white/60">No result yet. Try Verify.</div>}
             {result && (
-              <div className="mt-2 rounded-lg bg-white/5 p-3 text-sm">
-                {"error" in result && result.error ? (
-                  <div className="text-rose-300">Error: {result.error}</div>
-                ) : (
-                  <>
-                    <div className="text-white/80">Confidence: {Math.round((result.confidence ?? 0) * 100)}%</div>
-                    <div className="text-white/70">{result.feedback || "Checked."}</div>
-                  </>
-                )}
+              <div className="space-y-1">
+                <div>Confidence: <span className="font-mono">{(result.confidence * 100).toFixed(0)}%</span></div>
+                <div className="text-white/80">{result.feedback}</div>
               </div>
             )}
+            {errorMsg && <div className="text-rose-300">{errorMsg}</div>}
           </div>
-
-          <div className="grid gap-2">
-            <div className="text-sm text-white/70">Camera</div>
-            <video ref={videoRef} autoPlay playsInline muted className="w-full rounded-xl bg-black aspect-video" />
-          </div>
-        </>
-      )}
-
-      {/* Watch Lesson modal */}
-      {showLesson && (
-        <div className="modal-backdrop" onClick={() => setShowLesson(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm text-white/70">{lesson?.title ?? "Lesson"}</div>
-              <button className="btn btn-outline" onClick={() => setShowLesson(false)}>Close</button>
-            </div>
-            {lessonUrl ? (
-              <video src={lessonUrl} controls autoPlay className="w-full rounded-lg bg-black aspect-video" />
-            ) : (
-              <div className="p-6 text-white/70">No lesson video available.</div>
-            )}
+          <div className="text-xs text-white/40">
+            Tip: make sure your face/hands are well lit and steady during burst capture.
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
-}
-
-function parseSteps(md: string): string[] {
-  const lines = md.split(/\r?\n/).map((l) => l.trim());
-  const steps: string[] = [];
-  for (const l of lines) {
-    if (/^[-*]\s+/.test(l)) steps.push(l.replace(/^[-*]\s+/, ""));
-    else if (/^\d+\.\s+/.test(l)) steps.push(l.replace(/^\d+\.\s+/, ""));
-  }
-  return steps.length ? steps : [md].filter(Boolean);
 }
