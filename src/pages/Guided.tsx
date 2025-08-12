@@ -16,10 +16,17 @@ type Instruction = {
 function dataURLFromVideoFrame(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
-  quality = 0.7
+  quality = 0.6
 ): string {
-  const w = video.videoWidth || 640;
-  const h = video.videoHeight || 480;
+  // Downscale to max 640x480 to keep payloads small & fast
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+  const maxW = 640;
+  const maxH = 480;
+  let w = vw, h = vh;
+  const scale = Math.min(maxW / w, maxH / h, 1);
+  w = Math.max(1, Math.floor(w * scale));
+  h = Math.max(1, Math.floor(h * scale));
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
@@ -50,7 +57,10 @@ export default function Guided() {
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       setIsAuthed(!!session);
     });
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      sub.subscription.unsubscribe();
+      mounted = false;
+    };
   }, []);
 
   // Load instruction
@@ -58,7 +68,11 @@ export default function Guided() {
     let active = true;
     (async () => {
       if (!id) return;
-      const { data, error } = await supabase.from("instructions").select("*").eq("id", id).single();
+      const { data, error } = await supabase
+        .from("instructions")
+        .select("*")
+        .eq("id", id)
+        .single();
       if (!active) return;
       if (error) setErrorMsg(error.message);
       else setInstruction(data as Instruction);
@@ -94,6 +108,7 @@ export default function Guided() {
   }, []);
 
   async function getAuthHeader(): Promise<Record<string, string>> {
+    // For Edge Function with "Verify JWT" on
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
     if (!token) throw new Error("Please sign in to verify steps.");
@@ -132,13 +147,16 @@ export default function Guided() {
     setResult(null);
     try {
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
-      const image = dataURLFromVideoFrame(video, canvas, 0.75);
+      const image = dataURLFromVideoFrame(video, canvas, 0.7);
 
       const data = await callVerify({
         image,
         instruction_step: instruction.title || "current step",
       });
-      setResult({ confidence: Number(data.confidence || 0), feedback: String(data.feedback || "") });
+      setResult({
+        confidence: Number(data.confidence || 0),
+        feedback: String(data.feedback || ""),
+      });
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Verify failed.");
     } finally {
@@ -161,7 +179,7 @@ export default function Guided() {
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
       // capture 4 frames over ~600ms
       const frames: string[] = [];
-      const captureOnce = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.7));
+      const captureOnce = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.6));
 
       captureOnce();
       await new Promise((r) => setTimeout(r, 200));
@@ -171,16 +189,21 @@ export default function Guided() {
       await new Promise((r) => setTimeout(r, 200));
       captureOnce();
 
-      // choose the "best" frame by longest dataURL length (proxy for detail)
-      const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1200);
+      // choose the "best" frame by data size (proxy for detail)
+      const valid = frames.filter(
+        (f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1200
+      );
       if (!valid.length) throw new Error("No valid frames captured. Try again in better lighting.");
       const best = valid.sort((a, b) => b.length - a.length)[0];
 
       const data = await callVerify({
-        image: best, // <— send single image since the function requires it
+        image: best, // send single best frame to match API
         instruction_step: instruction.title || "current step",
       });
-      setResult({ confidence: Number(data.confidence || 0), feedback: String(data.feedback || "") });
+      setResult({
+        confidence: Number(data.confidence || 0),
+        feedback: String(data.feedback || ""),
+      });
     } catch (e: any) {
       setErrorMsg(e?.message ?? "Burst verify failed.");
     } finally {
@@ -199,7 +222,9 @@ export default function Guided() {
         <div className="text-white/60">Loading instruction…</div>
       )}
 
-      {!isAuthed && <div className="text-amber-300">Please sign in to use AI verification.</div>}
+      {!isAuthed && (
+        <div className="text-amber-300">Please sign in to use AI verification.</div>
+      )}
 
       <div className="grid md:grid-cols-[1fr,1fr] gap-4">
         <div>
@@ -219,16 +244,25 @@ export default function Guided() {
         <div className="space-y-3">
           <div className="card p-4">
             <h2 className="font-medium mb-2">Result</h2>
-            {!result && !errorMsg && <div className="text-white/60">No result yet. Try Verify.</div>}
+            {!result && !errorMsg && (
+              <div className="text-white/60">No result yet. Try Verify.</div>
+            )}
             {result && (
               <div className="space-y-1">
                 <div>
-                  Confidence: <span className="font-mono">{(result.confidence * 100).toFixed(0)}%</span>
+                  Confidence:{" "}
+                  <span className="font-mono">
+                    {(result.confidence * 100).toFixed(0)}%
+                  </span>
                 </div>
                 <div className="text-white/80">{result.feedback}</div>
               </div>
             )}
-            {errorMsg && <div className="text-rose-300 whitespace-pre-wrap break-words">{errorMsg}</div>}
+            {errorMsg && (
+              <div className="text-rose-300 whitespace-pre-wrap break-words">
+                {errorMsg}
+              </div>
+            )}
           </div>
           <div className="text-xs text-white/40">
             Tip: ensure good lighting and keep steady during burst capture.

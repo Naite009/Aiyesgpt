@@ -26,6 +26,8 @@ const router = createBrowserRouter([
       { path: "student/test/:id", element: <TestMode /> },
       // Teacher
       { path: "teacher/create", element: <Create /> },
+      // Redirect old/unknown teacher lessons route →
+      { path: "teacher/lessons", loader: () => redirect("/lessons") },
       // Media
       { path: "studio", element: <Studio /> },
       { path: "lessons", element: <Lessons /> },
