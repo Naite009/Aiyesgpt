@@ -2,38 +2,131 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 export default function AccountMenu() {
-  const [email, setEmail] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  // email / magic link UI state
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
-    supabase.auth.getUser().then(({ data }) => {
+
+    // initial session
+    supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
-      setEmail(data.user?.email ?? null);
+      setUser(data.session?.user ?? null);
+      setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setEmail(session?.user?.email ?? null);
+
+    // auth state changes
+    const { data: listener } = supabase.auth.onAuthStateChange((_evt, session) => {
+      setUser(session?.user ?? null);
     });
-    return () => { sub.subscription.unsubscribe(); mounted = false; };
+
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe?.();
+    };
   }, []);
 
-  async function signOut() {
+  const redirectTo =
+    (import.meta.env.VITE_SITE_URL as string | undefined) ||
+    // fallback to current origin (ensure this origin is allowed in Supabase Auth settings)
+    (typeof window !== "undefined" ? window.location.origin : undefined);
+
+  async function sendMagicLink() {
+    setMessage(null);
+    setError(null);
+
+    if (!email.trim()) {
+      setError("Enter your email first.");
+      return;
+    }
+    setSending(true);
     try {
-      setBusy(true);
-      await supabase.auth.signOut();
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: redirectTo ? { emailRedirectTo: redirectTo } : undefined,
+      });
+      if (error) {
+        setError(error.message);
+      } else {
+        setMessage("Magic link sent! Check your email.");
+      }
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to send magic link.");
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
-  if (!email) {
-    return <span className="text-white/60 text-sm">Not signed in</span>;
+  async function signInGoogle() {
+    setError(null);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: redirectTo ? { redirectTo } : undefined,
+      });
+      if (error) setError(error.message);
+    } catch (e: any) {
+      setError(e?.message ?? "Google sign-in failed.");
+    }
   }
+
+  async function signOut() {
+    setError(null);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) setError(error.message);
+    } catch (e: any) {
+      setError(e?.message ?? "Sign out failed.");
+    }
+  }
+
+  if (loading) {
+    return <div className="text-white/60 text-sm">…</div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="flex items-center gap-2">
+        <input
+          type="email"
+          className="input input-sm w-44"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={sendMagicLink}
+          disabled={sending}
+          title="Send magic link to your email"
+        >
+          {sending ? "Sending…" : "Send Magic Link"}
+        </button>
+        <button className="btn btn-outline btn-sm" onClick={signInGoogle} title="Continue with Google">
+          Sign in with Google
+        </button>
+        {(message || error) && (
+          <span className={`text-xs ${error ? "text-rose-300" : "text-emerald-300"}`}>
+            {error ?? message}
+          </span>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2">
-      <span className="text-white/70 text-sm truncate max-w-[160px]" title={email}>{email}</span>
-      <button className="btn btn-outline btn-xs" onClick={signOut} disabled={busy}>
-        {busy ? "…" : "Sign out"}
+      <span className="text-white/80 text-sm truncate max-w-[14rem]" title={user.email || user.user_metadata?.full_name}>
+        {user.email || user.user_metadata?.full_name || "User"}
+      </span>
+      <button className="btn btn-outline btn-sm" onClick={signOut}>
+        Sign Out
       </button>
     </div>
   );
