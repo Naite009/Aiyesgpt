@@ -18,7 +18,6 @@ function dataURLFromVideoFrame(
   canvas: HTMLCanvasElement,
   quality = 0.6
 ): string {
-  // Downscale to max 640x480 for smaller/faster payloads
   const vw = video.videoWidth || 640;
   const vh = video.videoHeight || 480;
   const maxW = 640;
@@ -68,7 +67,7 @@ export default function Guided() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // Detect function URL once
+  // Detect function URL
   useEffect(() => {
     const url =
       (import.meta as any).env?.VITE_VERIFY_STEP_FUNCTION_URL ||
@@ -132,31 +131,32 @@ export default function Guided() {
     if (!funcUrl) throw new Error("Verify function URL not configured.");
     const headers = await getAuthHeader();
 
-    // Helper to do one round-trip
-    const once = async () => {
+    // Add a client timeout so we never hang "pending" forever
+    const ctrl = new AbortController();
+    const timeoutMs = 12000; // 12s client timeout
+    const to = setTimeout(() => ctrl.abort(), timeoutMs);
+
+    try {
       const r = await fetch(funcUrl, {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: ctrl.signal,
       });
       const text = await r.text();
       setLastStatus(r.status);
       setLastBody(text);
-      if (!r.ok) {
-        throw new Error(`verify_step failed: ${r.status} – ${text}`);
-      }
+      if (!r.ok) throw new Error(`verify_step failed: ${r.status} – ${text}`);
       return JSON.parse(text);
-    };
-
-    try {
-      return await once();
     } catch (e: any) {
-      // Auto-retry once on 502 (Gemini overloaded)
-      if (String(e?.message || "").includes("verify_step failed: 502")) {
-        await new Promise((res) => setTimeout(res, 400));
-        return await once();
+      if (e?.name === "AbortError") {
+        setLastStatus(0);
+        setLastBody("client-timeout");
+        throw new Error("verify_step failed: client-timeout");
       }
       throw e;
+    } finally {
+      clearTimeout(to);
     }
   }
 
@@ -206,27 +206,19 @@ export default function Guided() {
 
     try {
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
-      // capture 4 frames over ~600ms
       const frames: string[] = [];
-      const captureOnce = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.6));
+      const cap = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.6));
+      cap(); await new Promise((r) => setTimeout(r, 200));
+      cap(); await new Promise((r) => setTimeout(r, 200));
+      cap(); await new Promise((r) => setTimeout(r, 200));
+      cap();
 
-      captureOnce();
-      await new Promise((r) => setTimeout(r, 200));
-      captureOnce();
-      await new Promise((r) => setTimeout(r, 200));
-      captureOnce();
-      await new Promise((r) => setTimeout(r, 200));
-      captureOnce();
-
-      // choose the "best" frame by data size (proxy for detail)
-      const valid = frames.filter(
-        (f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1200
-      );
+      const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1200);
       if (!valid.length) throw new Error("No valid frames captured. Try again in better lighting.");
       const best = valid.sort((a, b) => b.length - a.length)[0];
 
       const data = await callVerify({
-        image: best, // send single best frame to match API
+        image: best,
         instruction_step: instruction.title || "current step",
       });
       setResult({
@@ -267,12 +259,7 @@ export default function Guided() {
             <button className="btn btn-outline" disabled={busy || !isAuthed} onClick={verifyBurst}>
               {busy ? "Verifying…" : "Verify (burst)"}
             </button>
-
-            <button
-              className="btn btn-outline ml-auto"
-              type="button"
-              onClick={() => setShowDebug((s) => !s)}
-            >
+            <button className="btn btn-outline ml-auto" type="button" onClick={() => setShowDebug((s) => !s)}>
               {showDebug ? "Hide debug" : "Show debug"}
             </button>
           </div>
@@ -281,25 +268,14 @@ export default function Guided() {
         <div className="space-y-3">
           <div className="card p-4">
             <h2 className="font-medium mb-2">Result</h2>
-            {!result && !errorMsg && (
-              <div className="text-white/60">No result yet. Try Verify.</div>
-            )}
+            {!result && !errorMsg && <div className="text-white/60">No result yet. Try Verify.</div>}
             {result && (
               <div className="space-y-1">
-                <div>
-                  Confidence:{" "}
-                  <span className="font-mono">
-                    {(result.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
+                <div>Confidence: <span className="font-mono">{(result.confidence * 100).toFixed(0)}%</span></div>
                 <div className="text-white/80">{result.feedback}</div>
               </div>
             )}
-            {errorMsg && (
-              <div className="text-rose-300 whitespace-pre-wrap break-words">
-                {errorMsg}
-              </div>
-            )}
+            {errorMsg && <div className="text-rose-300 whitespace-pre-wrap break-words">{errorMsg}</div>}
           </div>
 
           {showDebug && (

@@ -1,3 +1,4 @@
+/// <reference path="../_types/deno.d.ts" />
 // deno-lint-ignore-file no-explicit-any
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
@@ -5,13 +6,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
  * CONFIG
  */
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-1.5-flash"; // or set secret to "gemini-1.5-flash-8b"
-const REQUIRE_JWT = true; // set false if you want to allow unauthenticated tests
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-1.5-flash";
+const REQUIRE_JWT = true; // keep true in production
 
 /**
  * CORS
- * Allow your app origin; "*" is fine if you don’t use cookies (we use Bearer token).
- * If you want to restrict: set ORIGIN to "https://aiyesgpt.vercel.app"
+ * If you want to restrict, set ORIGIN to "https://aiyesgpt.vercel.app"
  */
 const ORIGIN = "*";
 const CORS_HEADERS: Record<string, string> = {
@@ -89,9 +89,8 @@ async function callGeminiAnalyze(imageDataUrl: string, step: string, signal: Abo
       feedback = maybe.feedback;
     }
   } catch {
-    // Non-JSON text; keep as feedback
+    // keep raw text as feedback
   }
-
   return { ok: true as const, status: 200, confidence, feedback };
 }
 
@@ -101,7 +100,20 @@ export default async (req: Request) => {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  // 2) JWT (optional toggle)
+  // 2) Parse JSON early so we can allow unauthenticated ping
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch {
+    body = {};
+  }
+
+  // 3) Unauthenticated ping path for quick health checks & debugging
+  if (body?.ping === true) {
+    return json({ ok: true, model: GEMINI_MODEL });
+  }
+
+  // 4) JWT (only for real verification calls)
   if (REQUIRE_JWT) {
     const auth = req.headers.get("authorization") || req.headers.get("Authorization");
     if (!auth || !auth.toLowerCase().startsWith("bearer ")) {
@@ -111,15 +123,7 @@ export default async (req: Request) => {
 
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-  // 3) Parse JSON
-  let body: any = {};
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: "Invalid JSON" }, 400);
-  }
-
-  // 4) Accept { image } or { frames }
+  // 5) Accept { image } or { frames }
   const step = (body.instruction_step ?? "").toString().trim();
   let image: string | null = null;
   if (isDataUrlImage(body.image)) image = body.image;
@@ -133,7 +137,7 @@ export default async (req: Request) => {
     return json({ error: "Gemini key missing" }, 500);
   }
 
-  // 5) Retry + timeout (handles 429/503, etc.)
+  // 6) Retry + timeout (handles 429/503)
   const maxAttempts = 3;
   const baseDelay = 350;
 
