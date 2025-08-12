@@ -24,7 +24,6 @@ function dataURLFromVideoFrame(
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(video, 0, 0, w, h);
-  // JPEG keeps size small for the function
   return canvas.toDataURL("image/jpeg", quality);
 }
 
@@ -35,21 +34,31 @@ export default function Guided() {
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<{ confidence: number; feedback: string } | null>(null);
+  const [isAuthed, setIsAuthed] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Auth status
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setIsAuthed(!!data.session);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      setIsAuthed(!!session);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
 
   // Load instruction
   useEffect(() => {
     let active = true;
     (async () => {
       if (!id) return;
-      const { data, error } = await supabase
-        .from("instructions")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data, error } = await supabase.from("instructions").select("*").eq("id", id).single();
       if (!active) return;
       if (error) setErrorMsg(error.message);
       else setInstruction(data as Instruction);
@@ -84,6 +93,14 @@ export default function Guided() {
     };
   }, []);
 
+  async function getAuthHeader(): Promise<Record<string, string>> {
+    // Use the signed-in user's access token. (Works with verify_jwt on)
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("Please sign in to verify steps.");
+    return { Authorization: `Bearer ${token}` };
+  }
+
   async function verifySingle() {
     if (!instruction) return;
     const video = videoRef.current;
@@ -95,6 +112,7 @@ export default function Guided() {
     setErrorMsg(null);
     setResult(null);
     try {
+      const headers = await getAuthHeader();
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
       const image = dataURLFromVideoFrame(video, canvas, 0.7);
 
@@ -106,7 +124,7 @@ export default function Guided() {
 
       const r = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           image,
           instruction_step: instruction.title || "current step",
@@ -139,6 +157,7 @@ export default function Guided() {
     setResult(null);
 
     try {
+      const headers = await getAuthHeader();
       const canvas = (canvasRef.current ||= document.createElement("canvas"));
       // capture 4 frames over ~600ms
       const frames: string[] = [];
@@ -152,7 +171,6 @@ export default function Guided() {
       await new Promise((r) => setTimeout(r, 200));
       captureOnce();
 
-      // Filter obviously bad frames (tiny data URLs)
       const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1000);
       if (!valid.length) {
         setErrorMsg("No valid frames captured. Try again with better lighting.");
@@ -168,7 +186,7 @@ export default function Guided() {
 
       const r = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           frames: valid.slice(0, 4),
           instruction_step: instruction.title || "current step",
@@ -177,7 +195,6 @@ export default function Guided() {
 
       const text = await r.text();
       if (!r.ok) {
-        // 400 usually means the function saw "bad frames" – surface server message
         setErrorMsg(`verify_step failed: ${r.status} – ${text}`);
         return;
       }
@@ -194,22 +211,29 @@ export default function Guided() {
     <div className="space-y-4 text-white">
       <h1 className="text-xl font-semibold">Guided Mode</h1>
       {instruction ? (
-        <div className="text-white/80">Following: <span className="font-medium">{instruction.title}</span></div>
+        <div className="text-white/80">
+          Following: <span className="font-medium">{instruction.title}</span>
+        </div>
       ) : (
         <div className="text-white/60">Loading instruction…</div>
       )}
 
-      {/* Live preview */}
+      {!isAuthed && (
+        <div className="text-amber-300">
+          Please sign in to use AI verification.
+        </div>
+      )}
+
       <div className="grid md:grid-cols-[1fr,1fr] gap-4">
         <div>
           <div className="aspect-video bg-black/50 rounded-xl overflow-hidden border border-white/10">
             <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button className="btn btn-primary" disabled={busy} onClick={verifySingle}>
+            <button className="btn btn-primary" disabled={busy || !isAuthed} onClick={verifySingle}>
               {busy ? "Verifying…" : "Verify (single)"}
             </button>
-            <button className="btn btn-outline" disabled={busy} onClick={verifyBurst}>
+            <button className="btn btn-outline" disabled={busy || !isAuthed} onClick={verifyBurst}>
               {busy ? "Verifying…" : "Verify (burst)"}
             </button>
           </div>
@@ -221,14 +245,16 @@ export default function Guided() {
             {!result && !errorMsg && <div className="text-white/60">No result yet. Try Verify.</div>}
             {result && (
               <div className="space-y-1">
-                <div>Confidence: <span className="font-mono">{(result.confidence * 100).toFixed(0)}%</span></div>
+                <div>
+                  Confidence: <span className="font-mono">{(result.confidence * 100).toFixed(0)}%</span>
+                </div>
                 <div className="text-white/80">{result.feedback}</div>
               </div>
             )}
-            {errorMsg && <div className="text-rose-300">{errorMsg}</div>}
+            {errorMsg && <div className="text-rose-300 whitespace-pre-wrap break-words">{errorMsg}</div>}
           </div>
           <div className="text-xs text-white/40">
-            Tip: make sure your face/hands are well lit and steady during burst capture.
+            Tip: ensure good lighting and keep steady during burst capture.
           </div>
         </div>
       </div>
