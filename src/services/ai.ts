@@ -1,7 +1,7 @@
 // src/services/ai.ts
 const VERIFY_URL = (import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL as string | undefined)?.trim();
 
-type VerifyResponse = {
+export type VerifyResponse = {
   confidence?: number;
   feedback?: string;
   error?: string;
@@ -76,4 +76,38 @@ export async function verifyBurst(frames: string[], step: string) {
 export async function verifyPing() {
   const { obj, status } = await postJSON({ ping: true });
   return { ...obj, status };
+}
+
+/**
+ * parseStepsFromMarkdown
+ * - Extracts step-like lines from markdown/text (numbers, bullets, or plain lines).
+ * - Returns a cleaned list of non-empty steps.
+ */
+export function parseStepsFromMarkdown(md: string): string[] {
+  if (!md) return [];
+  const lines = md.split(/\r?\n/);
+
+  const steps: string[] = [];
+  for (let raw of lines) {
+    let s = raw.trim();
+    if (!s) continue;
+
+    // Strip common prefixes: "1. ", "1) ", "- ", "* ", "• "
+    s = s.replace(/^(\d+[\.\)]\s+|-|\*|•)\s*/, "");
+
+    // Ignore headings and long markdown formatting lines
+    if (/^#{1,6}\s/.test(s)) {
+      s = s.replace(/^#{1,6}\s*/, "").trim();
+    }
+    if (!s) continue;
+
+    steps.push(s);
+  }
+
+  // Deduplicate consecutive duplicates
+  const cleaned: string[] = [];
+  for (const s of steps) {
+    if (cleaned[cleaned.length - 1] !== s) cleaned.push(s);
+  }
+  return cleaned;
 }

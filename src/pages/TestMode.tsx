@@ -1,119 +1,159 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { parseStepsFromMarkdown } from "@/services/ai";
 
-type Row = {
+type Instruction = {
   id: string;
   title: string;
-  content: string;
-  created_at: string;
+  content?: string | null;
 };
 
-interface Q {
-  id: string;
-  prompt: string;
-  options?: string[];
-  answer?: number;
-  type: "mc" | "practical";
-}
+type MCQ = {
+  q: string;
+  options: string[];
+  answerIndex: number;
+};
 
 export default function TestMode() {
   const { id } = useParams<{ id: string }>();
-  const [row, setRow] = useState<Row | null>(null);
+  const [instruction, setInstruction] = useState<Instruction | null>(null);
   const [loading, setLoading] = useState(true);
-  const [score, setScore] = useState(0);
-  const [answered, setAnswered] = useState<Record<string, boolean>>({});
+  const [err, setErr] = useState<string | null>(null);
 
+  // Load the instruction
   useEffect(() => {
-    let active = true;
-    (async () => {
+    let alive = true;
+    async function run() {
+      if (!id) return;
       setLoading(true);
-      const { data, error } = await supabase
-        .from("instructions")
-        .select("*")
-        .eq("id", id)
-        .maybeSingle();
-      if (!active) return;
-      if (error) console.error("Load instruction error:", error);
-      setRow(data as Row | null);
+      setErr(null);
+      const { data, error } = await supabase.from("instructions").select("*").eq("id", id).single();
+      if (!alive) return;
+      if (error) {
+        setErr(error.message || String(error));
+        setInstruction(null);
+      } else {
+        setInstruction(data as Instruction);
+      }
       setLoading(false);
-      setScore(0);
-      setAnswered({});
-    })();
-    return () => { active = false; };
+    }
+    run();
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
-  const steps = useMemo(() => {
-    const md = row?.content ?? "";
-    const parsed = parseStepsFromMarkdown(md);
-    return parsed.length ? parsed : (md ? [md] : []);
-  }, [row?.content]);
+  // Naive question generator: turn steps into MCQs (demo-quality)
+  const questions: MCQ[] = useMemo(() => {
+    const md = instruction?.content ?? "";
+    const steps = parseStepsFromMarkdown(md).slice(0, 6); // cap it a bit
+    if (!steps.length) return [];
 
-  const questions: Q[] = useMemo(() => {
-    if (steps.length === 0) return [];
-    const firstStep = steps[0];
-    const opts = steps.slice(0, Math.min(4, steps.length));
-    return [
-      { id: "q1", type: "mc", prompt: `What is the first step?`, options: opts, answer: 0 },
-      { id: "q2", type: "practical", prompt: `Show the result of step: ${steps[Math.min(1, steps.length - 1)]}` },
-    ];
-  }, [steps]);
+    const qs: MCQ[] = [];
+    for (const step of steps) {
+      // Build a simple multiple-choice question "Which step matches this?"
+      const correct = step;
+      const distractors = steps
+        .filter((s) => s !== step)
+        .slice(0, 3);
+      while (distractors.length < 3) distractors.push("None of the above");
 
-  const handleMC = (q: Q, choice: number) => {
-    if (answered[q.id]) return; // prevent double scoring
-    setAnswered((a) => ({ ...a, [q.id]: true }));
-    if (choice === q.answer) setScore((s) => s + 1);
-  };
+      const choices = [correct, ...distractors].slice(0, 4);
+      // shuffle deterministically-ish
+      const shuffled = [...choices].sort((a, b) => a.localeCompare(b));
+      const answerIndex = shuffled.findIndex((c) => c === correct);
+      qs.push({
+        q: `Which of the following best matches this step?`,
+        options: shuffled,
+        answerIndex: Math.max(0, answerIndex),
+      });
+    }
+    return qs;
+  }, [instruction]);
 
-  if (loading) return <div>Loading…</div>;
-  if (!row) return <div className="text-white/70">Instruction not found.</div>;
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [score, setScore] = useState<number>(0);
+  const done = idx >= questions.length;
 
-  const totalMC = questions.filter((q) => q.type === "mc").length;
+  useEffect(() => {
+    setPicked(null);
+  }, [idx]);
+
+  function submit() {
+    if (picked === null) return;
+    const isCorrect = picked === questions[idx].answerIndex;
+    setScore((s) => s + (isCorrect ? 1 : 0));
+    setIdx((i) => i + 1);
+  }
+
+  if (loading) return <div className="p-6">Loading…</div>;
+  if (err) return <div className="p-6 text-red-600">Error: {err}</div>;
+  if (!instruction) return <div className="p-6 text-red-600">Instruction not found.</div>;
 
   return (
-    <div className="grid gap-4">
-      <h1 className="text-2xl font-semibold">Test: {row.title}</h1>
+    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold">Test Mode</h1>
+        <div className="text-sm opacity-80">{instruction.title}</div>
+      </div>
 
-      {questions.length === 0 ? (
-        <div className="text-white/70">No questions could be generated for this content.</div>
+      {!questions.length ? (
+        <div className="p-4 rounded-xl border">
+          No questions generated from this instruction yet.
+        </div>
+      ) : done ? (
+        <div className="p-4 rounded-xl border">
+          <div className="text-lg font-semibold mb-1">Results</div>
+          <div>
+            Score: {score} / {questions.length} (
+            {Math.round((score / Math.max(1, questions.length)) * 100)}%)
+          </div>
+        </div>
       ) : (
-        <div className="space-y-3">
-          {questions.map((q, idx) => (
-            <div key={q.id} className="card p-4">
-              <div className="mb-2 text-sm text-white/60">Question {idx + 1}</div>
-              <div className="font-medium">{q.prompt}</div>
+        <div className="p-4 rounded-xl border space-y-3">
+          <div className="text-sm opacity-70">
+            Question {idx + 1} of {questions.length}
+          </div>
+          <div className="text-lg">{questions[idx].q}</div>
 
-              {q.type === "mc" && (
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {q.options?.map((opt, i) => (
-                    <button
-                      key={i}
-                      className={`btn ${answered[q.id] && i === q.answer ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => handleMC(q, i)}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              )}
+          <div className="space-y-2">
+            {questions[idx].options.map((opt, i) => (
+              <label
+                key={i}
+                className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer ${
+                  picked === i ? "bg-blue-50 border-blue-400" : "hover:bg-slate-50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="answer"
+                  checked={picked === i}
+                  onChange={() => setPicked(i)}
+                />
+                <span>{opt}</span>
+              </label>
+            ))}
+          </div>
 
-              {q.type === "practical" && (
-                <div className="mt-2 space-y-2 text-sm text-white/80">
-                  <div>Use Guided Mode to verify practical answers with the camera.</div>
-                  <Link to={`/guided/${row.id}`} className="btn btn-primary">
-                    Open Guided Mode
-                  </Link>
-                </div>
-              )}
-            </div>
-          ))}
+          <div className="flex gap-2 pt-2">
+            <button
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
+              onClick={submit}
+              disabled={picked === null}
+            >
+              Submit
+            </button>
+            <button
+              className="px-4 py-2 rounded-lg bg-slate-600 text-white"
+              onClick={() => setIdx((i) => Math.min(questions.length, i + 1))}
+            >
+              Skip
+            </button>
+          </div>
         </div>
       )}
-
-      <div className="text-white/80">
-        Score: {score} / {totalMC}
-      </div>
     </div>
   );
 }
