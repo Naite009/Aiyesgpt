@@ -1,4 +1,3 @@
-// src/pages/Guided.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { verifySingle, verifyBurst, verifyPing } from "@/services/ai";
@@ -21,11 +20,7 @@ function useInstruction(id?: string) {
       if (!id) return;
       setLoading(true);
       setErr(null);
-      const { data: row, error } = await supabase
-        .from("instructions")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const { data: row, error } = await supabase.from("instructions").select("*").eq("id", id).single();
       if (!alive) return;
       if (error) setErr(error.message || String(error));
       setData(row ?? null);
@@ -62,22 +57,17 @@ export default function Guided() {
 
   const [busy, setBusy] = useState(false);
   const [lastStatus, setLastStatus] = useState<number | null>(null);
-  const [result, setResult] = useState<{
-    confidence?: number;
-    feedback?: string;
-    raw?: any;
-  } | null>(null);
+  const [lastAction, setLastAction] = useState<"ping" | "single" | "burst" | null>(null);
+  const [result, setResult] = useState<{ confidence?: number; feedback?: string; raw?: any } | null>(null);
 
   const [showDebug, setShowDebug] = useState(false);
   const [envUrl, setEnvUrl] = useState<string | null>(null);
   const [signedEmail, setSignedEmail] = useState<string | null>(null);
+  const [burstCountdown, setBurstCountdown] = useState<number>(0);
 
   const stepText = useMemo(() => {
     const raw = instruction?.content ?? "";
-    const lines = raw
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const lines = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     return lines[0] ?? instruction?.title ?? "Follow the instruction";
   }, [instruction]);
 
@@ -88,14 +78,12 @@ export default function Guided() {
     });
   }, []);
 
+  // Start camera
   useEffect(() => {
     let alive = true;
     async function start() {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-          audio: false,
-        });
+        const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
         if (!alive) return;
         setStream(s);
         if (videoRef.current) {
@@ -117,13 +105,10 @@ export default function Guided() {
   async function doPing() {
     try {
       setBusy(true);
+      setLastAction("ping");
       const r = await verifyPing();
       setLastStatus(r.status ?? null);
-      setResult({
-        raw: r,
-        confidence: typeof r.confidence === "number" ? r.confidence : undefined,
-        feedback: r.feedback,
-      });
+      setResult({ raw: r, confidence: r.confidence, feedback: r.feedback });
     } catch (e: any) {
       setResult({ raw: { error: String(e?.message ?? e) } });
     } finally {
@@ -135,20 +120,17 @@ export default function Guided() {
     const vid = videoRef.current;
     const img = vid ? dataUrlFromVideo(vid) : null;
     if (!img) {
-      setResult({
-        raw: { error: "no-frame" },
-        feedback: "Could not capture a frame from camera.",
-      });
+      setResult({ raw: { error: "no-frame" }, feedback: "Could not capture a frame from camera." });
       return;
     }
     try {
       setBusy(true);
+      setLastAction("single");
       const r = await verifySingle(img, stepText);
       setLastStatus(r.status ?? null);
       setResult({
         raw: r,
-        confidence:
-          typeof r.confidence === "number" ? Math.max(0, Math.min(1, r.confidence)) : undefined,
+        confidence: typeof r.confidence === "number" ? Math.max(0, Math.min(1, r.confidence)) : undefined,
         feedback: r.feedback,
       });
     } catch (e: any) {
@@ -161,34 +143,39 @@ export default function Guided() {
   async function doVerifyBurst() {
     const vid = videoRef.current;
     if (!vid) {
-      setResult({
-        raw: { error: "no-video" },
-        feedback: "Camera not ready.",
-      });
+      setResult({ raw: { error: "no-video" }, feedback: "Camera not ready." });
       return;
     }
+
+    // Quick 3-2-1 countdown
+    for (let c = 3; c > 0; c--) {
+      setBurstCountdown(c);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    setBurstCountdown(0);
+
+    // Capture 10 frames over ~2.5s (250ms interval)
     const frames: string[] = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       const f = dataUrlFromVideo(vid);
       if (f) frames.push(f);
       // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 250));
     }
     if (!frames.length) {
-      setResult({
-        raw: { error: "no-frames" },
-        feedback: "Could not capture frames.",
-      });
+      setResult({ raw: { error: "no-frames" }, feedback: "Could not capture frames." });
       return;
     }
+
     try {
       setBusy(true);
+      setLastAction("burst");
       const r = await verifyBurst(frames, stepText);
       setLastStatus(r.status ?? null);
       setResult({
         raw: r,
-        confidence:
-          typeof r.confidence === "number" ? Math.max(0, Math.min(1, r.confidence)) : undefined,
+        confidence: typeof r.confidence === "number" ? Math.max(0, Math.min(1, r.confidence)) : undefined,
         feedback: r.feedback,
       });
     } catch (e: any) {
@@ -198,10 +185,7 @@ export default function Guided() {
     }
   }
 
-  const confidencePct =
-    typeof result?.confidence === "number"
-      ? Math.round(Math.max(0, Math.min(1, result.confidence)) * 100)
-      : null;
+  const confidencePct = typeof result?.confidence === "number" ? Math.round(result.confidence * 100) : null;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
@@ -222,40 +206,27 @@ export default function Guided() {
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-3">
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            className="w-full rounded-xl bg-black aspect-video object-cover"
-          />
+          <div className="relative">
+            <video ref={videoRef} playsInline muted className="w-full rounded-xl bg-black aspect-video object-cover" />
+            {burstCountdown > 0 && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="text-white text-5xl font-bold drop-shadow-lg">{burstCountdown}</div>
+              </div>
+            )}
+          </div>
+
           <div className="flex flex-wrap gap-2">
-            <button
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
-              onClick={doVerifySingle}
-              disabled={busy}
-            >
-              {busy ? "Verifying…" : "Verify (single)"}
+            <button className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50" onClick={doVerifySingle} disabled={busy}>
+              {busy && lastAction === "single" ? "Verifying…" : "Verify (single)"}
             </button>
-            <button
-              className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50"
-              onClick={doVerifyBurst}
-              disabled={busy}
-            >
-              {busy ? "Verifying…" : "Verify (burst)"}
+            <button className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50" onClick={doVerifyBurst} disabled={busy}>
+              {busy && lastAction === "burst" ? "Verifying…" : "Verify (burst)"}
             </button>
-            <button
-              className="px-4 py-2 rounded-lg bg-slate-700 text-white disabled:opacity-50"
-              onClick={() => setShowDebug((v) => !v)}
-              disabled={busy}
-            >
+            <button className="px-4 py-2 rounded-lg bg-slate-700 text-white disabled:opacity-50" onClick={() => setShowDebug((v) => !v)} disabled={busy}>
               {showDebug ? "Hide debug" : "Show debug"}
             </button>
-            <button
-              className="px-4 py-2 rounded-lg bg-slate-500 text-white disabled:opacity-50"
-              onClick={doPing}
-              disabled={busy}
-            >
-              Ping API
+            <button className="px-4 py-2 rounded-lg bg-slate-500 text-white disabled:opacity-50" onClick={doPing} disabled={busy}>
+              {busy && lastAction === "ping" ? "Pinging…" : "Ping API"}
             </button>
           </div>
         </div>
@@ -268,20 +239,15 @@ export default function Guided() {
             ) : (
               <div className="text-lg">No result yet. Try Verify.</div>
             )}
-            {result?.feedback && (
-              <div className="mt-2 text-sm opacity-80">{result.feedback}</div>
-            )}
-            {result?.raw?.error && (
-              <div className="mt-2 text-sm text-red-600">
-                Error: {String(result.raw.error)}
-              </div>
-            )}
+            {result?.feedback && <div className="mt-2 text-sm opacity-80">{result.feedback}</div>}
+            {result?.raw?.error && <div className="mt-2 text-sm text-red-600">Error: {String(result.raw.error)}</div>}
           </div>
 
           {showDebug && (
             <div className="p-4 rounded-xl border">
               <div className="text-sm font-semibold mb-2">Debug</div>
               <div className="text-xs space-y-1">
+                <div>Last action: {lastAction ?? "—"}</div>
                 <div>Signed in: {signedEmail ? "yes" : "no"}</div>
                 <div>Email: {signedEmail ?? "—"}</div>
                 <div>Function URL present: {envUrl ? "yes" : "no"}</div>

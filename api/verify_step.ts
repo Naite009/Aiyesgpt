@@ -20,7 +20,7 @@ function isDataUrlImage(s: unknown): s is string {
 function pickBestFrame(frames: string[]): string | null {
   const valid = frames.filter((f) => isDataUrlImage(f) && f.length > 1200);
   if (!valid.length) return null;
-  return valid.sort((a, b) => b.length - a.length)[0];
+  return valid.sort((a, b) => b.length - a.length)[0]; // longest payload ≈ richest frame
 }
 
 async function callGeminiAnalyze(
@@ -35,7 +35,9 @@ async function callGeminiAnalyze(
       {
         parts: [
           {
-            text: `User claims they performed this step: "${step}".\nReturn JSON: {"confidence": number in [0,1], "feedback": string}.`,
+            text:
+              `You are verifying whether a single photo shows the user completing this step: "${step}".\n` +
+              `Return **only** strict JSON like: {"confidence": 0.0-1.0, "feedback": "short helpful text"}`
           },
           {
             inline_data: {
@@ -79,7 +81,7 @@ async function callGeminiAnalyze(
       feedback = parsed.feedback;
     }
   } catch {
-    // Keep raw text
+    // fall back to raw text as feedback
   }
   return { ok: true as const, status: 200, confidence, feedback };
 }
@@ -100,14 +102,14 @@ export default async function handler(req: Request): Promise<Response> {
     return json({ ok: true, model });
   }
 
-  // Mock verify
+  // Mock verify (for UI fallback/testing)
   if (body?.mockVerify === true) {
     const c = typeof body.mockConfidence === "number" ? body.mockConfidence : 0.9;
     const f = body.mockFeedback ?? "Mock verification OK.";
     return json({ confidence: c, feedback: f });
   }
 
-  // Real verification
+  // Real verification path
   const step = (body?.instruction_step ?? "").toString().trim();
   let image: string | null = null;
   if (isDataUrlImage(body?.image)) image = body.image;
@@ -116,7 +118,7 @@ export default async function handler(req: Request): Promise<Response> {
   if (!image || !step) return json({ error: "image and instruction_step required" }, 400);
   if (!key) return json({ error: "Missing GEMINI_API_KEY" }, 500);
 
-  // Timeout so UI doesn't hang forever
+  // Timeout keeps UI snappy
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
