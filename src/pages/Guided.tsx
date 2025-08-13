@@ -1,301 +1,299 @@
-import { useEffect, useRef, useState } from "react";
+// src/pages/Guided.tsx
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
+import { verifySingle, verifyBurst, verifyPing } from "@/services/ai";
 import { supabase } from "@/lib/supabase";
 
 type Instruction = {
   id: string;
   title: string;
-  content?: string;
-  category?: string | null;
-  tags?: string[] | null;
-  is_public?: boolean | null;
-  created_by?: string | null;
-  created_at?: string;
+  content?: string | null;
 };
 
-function dataURLFromVideoFrame(
-  video: HTMLVideoElement,
-  canvas: HTMLCanvasElement,
-  quality = 0.6
-): string {
-  const vw = video.videoWidth || 640;
-  const vh = video.videoHeight || 480;
-  const maxW = 640;
-  const maxH = 480;
-  const scale = Math.min(maxW / vw, maxH / vh, 1);
-  const w = Math.max(1, Math.floor(vw * scale));
-  const h = Math.max(1, Math.floor(vh * scale));
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(video, 0, 0, w, h);
-  return canvas.toDataURL("image/jpeg", quality);
-}
+function useInstruction(id?: string) {
+  const [data, setData] = useState<Instruction | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
-export default function Guided() {
-  const { id } = useParams<{ id: string }>();
-  const [instruction, setInstruction] = useState<Instruction | null>(null);
-
-  const [busy, setBusy] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [result, setResult] = useState<{ confidence: number; feedback: string } | null>(null);
-
-  // Debug & status
-  const [isAuthed, setIsAuthed] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [funcUrl, setFuncUrl] = useState<string>("");
-  const [lastStatus, setLastStatus] = useState<number | null>(null);
-  const [lastBody, setLastBody] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
-
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // Auth status
   useEffect(() => {
-    let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setIsAuthed(!!data.session);
-      setUserEmail(data.session?.user?.email ?? null);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
-      setIsAuthed(!!session);
-      setUserEmail(session?.user?.email ?? null);
-    });
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  // Detect function URL
-  useEffect(() => {
-    const url =
-      (import.meta as any).env?.VITE_VERIFY_STEP_FUNCTION_URL ||
-      (import.meta as any).env?.VITE_SUPABASE_EDGE_VERIFY_URL ||
-      "";
-    setFuncUrl(url || "");
-  }, []);
-
-  // Load instruction
-  useEffect(() => {
-    let active = true;
-    (async () => {
+    let alive = true;
+    async function run() {
       if (!id) return;
-      const { data, error } = await supabase
+      setLoading(true);
+      setErr(null);
+      const { data: row, error } = await supabase
         .from("instructions")
         .select("*")
         .eq("id", id)
         .single();
-      if (!active) return;
-      if (error) setErrorMsg(error.message);
-      else setInstruction(data as Instruction);
-    })();
+      if (!alive) return;
+      if (error) setErr(error.message || String(error));
+      setData(row ?? null);
+      setLoading(false);
+    }
+    run();
     return () => {
-      active = false;
+      alive = false;
     };
   }, [id]);
 
-  // Start camera preview
+  return { data, loading, err };
+}
+
+function dataUrlFromVideo(video: HTMLVideoElement): string | null {
+  const canvas = document.createElement("canvas");
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (!w || !h) return null;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, w, h);
+  return canvas.toDataURL("image/jpeg", 0.85);
+}
+
+export default function Guided() {
+  const { id } = useParams<{ id: string }>();
+  const { data: instruction, loading: loadingInstruction, err: instructionErr } = useInstruction(id);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+
+  const [busy, setBusy] = useState(false);
+  const [lastStatus, setLastStatus] = useState<number | null>(null);
+  const [result, setResult] = useState<{
+    confidence?: number;
+    feedback?: string;
+    raw?: any;
+  } | null>(null);
+
+  const [showDebug, setShowDebug] = useState(false);
+  const [envUrl, setEnvUrl] = useState<string | null>(null);
+  const [signedEmail, setSignedEmail] = useState<string | null>(null);
+
+  const stepText = useMemo(() => {
+    const raw = instruction?.content ?? "";
+    const lines = raw
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return lines[0] ?? instruction?.title ?? "Follow the instruction";
+  }, [instruction]);
+
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    setEnvUrl((import.meta.env.VITE_VERIFY_STEP_FUNCTION_URL as string | undefined) ?? null);
+    supabase.auth.getSession().then(({ data }) => {
+      setSignedEmail(data.session?.user?.email ?? null);
+    });
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    async function start() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const s = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: "user" },
           audio: false,
         });
-        if (cancelled) return;
-        streamRef.current = stream;
+        if (!alive) return;
+        setStream(s);
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+          videoRef.current.srcObject = s;
           await videoRef.current.play().catch(() => {});
         }
-      } catch (e: any) {
-        setErrorMsg(e?.message ?? "Camera permission denied.");
+      } catch (e) {
+        console.error("[guided] camera failed", e);
       }
-    })();
+    }
+    start();
     return () => {
-      cancelled = true;
-      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+      alive = false;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function getAuthHeader(): Promise<Record<string, string>> {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) throw new Error("Please sign in to verify steps.");
-    return { Authorization: `Bearer ${token}` };
-  }
-
-  async function callVerify(payload: any) {
-    if (!funcUrl) throw new Error("Verify function URL not configured.");
-    const headers = await getAuthHeader();
-
-    // Add a client timeout so we never hang "pending" forever
-    const ctrl = new AbortController();
-    const timeoutMs = 12000; // 12s client timeout
-    const to = setTimeout(() => ctrl.abort(), timeoutMs);
-
+  async function doPing() {
     try {
-      const r = await fetch(funcUrl, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
-      const text = await r.text();
-      setLastStatus(r.status);
-      setLastBody(text);
-      if (!r.ok) throw new Error(`verify_step failed: ${r.status} – ${text}`);
-      return JSON.parse(text);
-    } catch (e: any) {
-      if (e?.name === "AbortError") {
-        setLastStatus(0);
-        setLastBody("client-timeout");
-        throw new Error("verify_step failed: client-timeout");
-      }
-      throw e;
-    } finally {
-      clearTimeout(to);
-    }
-  }
-
-  async function verifySingle() {
-    if (!instruction) return;
-    const video = videoRef.current;
-    if (!video) {
-      setErrorMsg("Camera not ready.");
-      return;
-    }
-    setBusy(true);
-    setErrorMsg(null);
-    setResult(null);
-    setLastStatus(null);
-    setLastBody(null);
-    try {
-      const canvas = (canvasRef.current ||= document.createElement("canvas"));
-      const image = dataURLFromVideoFrame(video, canvas, 0.7);
-
-      const data = await callVerify({
-        image,
-        instruction_step: instruction.title || "current step",
-      });
+      setBusy(true);
+      const r = await verifyPing();
+      setLastStatus(r.status ?? null);
       setResult({
-        confidence: Number(data.confidence || 0),
-        feedback: String(data.feedback || ""),
+        raw: r,
+        confidence: typeof r.confidence === "number" ? r.confidence : undefined,
+        feedback: r.feedback,
       });
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Verify failed.");
+      setResult({ raw: { error: String(e?.message ?? e) } });
     } finally {
       setBusy(false);
     }
   }
 
-  async function verifyBurst() {
-    if (!instruction) return;
-    const video = videoRef.current;
-    if (!video) {
-      setErrorMsg("Camera not ready.");
+  async function doVerifySingle() {
+    const vid = videoRef.current;
+    const img = vid ? dataUrlFromVideo(vid) : null;
+    if (!img) {
+      setResult({
+        raw: { error: "no-frame" },
+        feedback: "Could not capture a frame from camera.",
+      });
       return;
     }
-    setBusy(true);
-    setErrorMsg(null);
-    setResult(null);
-    setLastStatus(null);
-    setLastBody(null);
-
     try {
-      const canvas = (canvasRef.current ||= document.createElement("canvas"));
-      const frames: string[] = [];
-      const cap = () => frames.push(dataURLFromVideoFrame(video, canvas, 0.6));
-      cap(); await new Promise((r) => setTimeout(r, 200));
-      cap(); await new Promise((r) => setTimeout(r, 200));
-      cap(); await new Promise((r) => setTimeout(r, 200));
-      cap();
-
-      const valid = frames.filter((f) => typeof f === "string" && f.startsWith("data:image/") && f.length > 1200);
-      if (!valid.length) throw new Error("No valid frames captured. Try again in better lighting.");
-      const best = valid.sort((a, b) => b.length - a.length)[0];
-
-      const data = await callVerify({
-        image: best,
-        instruction_step: instruction.title || "current step",
-      });
+      setBusy(true);
+      const r = await verifySingle(img, stepText);
+      setLastStatus(r.status ?? null);
       setResult({
-        confidence: Number(data.confidence || 0),
-        feedback: String(data.feedback || ""),
+        raw: r,
+        confidence:
+          typeof r.confidence === "number" ? Math.max(0, Math.min(1, r.confidence)) : undefined,
+        feedback: r.feedback,
       });
     } catch (e: any) {
-      setErrorMsg(e?.message ?? "Burst verify failed.");
+      setResult({ raw: { error: String(e?.message ?? e) } });
     } finally {
       setBusy(false);
     }
   }
+
+  async function doVerifyBurst() {
+    const vid = videoRef.current;
+    if (!vid) {
+      setResult({
+        raw: { error: "no-video" },
+        feedback: "Camera not ready.",
+      });
+      return;
+    }
+    const frames: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const f = dataUrlFromVideo(vid);
+      if (f) frames.push(f);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!frames.length) {
+      setResult({
+        raw: { error: "no-frames" },
+        feedback: "Could not capture frames.",
+      });
+      return;
+    }
+    try {
+      setBusy(true);
+      const r = await verifyBurst(frames, stepText);
+      setLastStatus(r.status ?? null);
+      setResult({
+        raw: r,
+        confidence:
+          typeof r.confidence === "number" ? Math.max(0, Math.min(1, r.confidence)) : undefined,
+        feedback: r.feedback,
+      });
+    } catch (e: any) {
+      setResult({ raw: { error: String(e?.message ?? e) } });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const confidencePct =
+    typeof result?.confidence === "number"
+      ? Math.round(Math.max(0, Math.min(1, result.confidence)) * 100)
+      : null;
 
   return (
-    <div className="space-y-4 text-white">
-      <h1 className="text-xl font-semibold">Guided Mode</h1>
-      {instruction ? (
-        <div className="text-white/80">
-          Following: <span className="font-medium">{instruction.title}</span>
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Guided Mode</h1>
+
+      {loadingInstruction ? (
+        <p>Loading instruction…</p>
+      ) : instructionErr ? (
+        <p className="text-red-600">Failed to load instruction: {instructionErr}</p>
+      ) : instruction ? (
+        <div className="space-y-2">
+          <div className="text-lg font-medium">{instruction.title}</div>
+          {stepText && <div className="text-sm opacity-80">Current step: {stepText}</div>}
         </div>
       ) : (
-        <div className="text-white/60">Loading instruction…</div>
+        <p className="text-red-600">Instruction not found.</p>
       )}
 
-      {!isAuthed && (
-        <div className="text-amber-300">Please sign in to use AI verification.</div>
-      )}
-
-      <div className="grid md:grid-cols-[1fr,1fr] gap-4">
-        <div>
-          <div className="aspect-video bg-black/50 rounded-xl overflow-hidden border border-white/10">
-            <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button className="btn btn-primary" disabled={busy || !isAuthed} onClick={verifySingle}>
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="space-y-3">
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            className="w-full rounded-xl bg-black aspect-video object-cover"
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
+              onClick={doVerifySingle}
+              disabled={busy}
+            >
               {busy ? "Verifying…" : "Verify (single)"}
             </button>
-            <button className="btn btn-outline" disabled={busy || !isAuthed} onClick={verifyBurst}>
+            <button
+              className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50"
+              onClick={doVerifyBurst}
+              disabled={busy}
+            >
               {busy ? "Verifying…" : "Verify (burst)"}
             </button>
-            <button className="btn btn-outline ml-auto" type="button" onClick={() => setShowDebug((s) => !s)}>
+            <button
+              className="px-4 py-2 rounded-lg bg-slate-700 text-white disabled:opacity-50"
+              onClick={() => setShowDebug((v) => !v)}
+              disabled={busy}
+            >
               {showDebug ? "Hide debug" : "Show debug"}
+            </button>
+            <button
+              className="px-4 py-2 rounded-lg bg-slate-500 text-white disabled:opacity-50"
+              onClick={doPing}
+              disabled={busy}
+            >
+              Ping API
             </button>
           </div>
         </div>
 
         <div className="space-y-3">
-          <div className="card p-4">
-            <h2 className="font-medium mb-2">Result</h2>
-            {!result && !errorMsg && <div className="text-white/60">No result yet. Try Verify.</div>}
-            {result && (
-              <div className="space-y-1">
-                <div>Confidence: <span className="font-mono">{(result.confidence * 100).toFixed(0)}%</span></div>
-                <div className="text-white/80">{result.feedback}</div>
+          <div className="p-4 rounded-xl border">
+            <div className="text-sm font-semibold mb-2">Result</div>
+            {confidencePct !== null ? (
+              <div className="text-lg">Confidence: {confidencePct}%</div>
+            ) : (
+              <div className="text-lg">No result yet. Try Verify.</div>
+            )}
+            {result?.feedback && (
+              <div className="mt-2 text-sm opacity-80">{result.feedback}</div>
+            )}
+            {result?.raw?.error && (
+              <div className="mt-2 text-sm text-red-600">
+                Error: {String(result.raw.error)}
               </div>
             )}
-            {errorMsg && <div className="text-rose-300 whitespace-pre-wrap break-words">{errorMsg}</div>}
           </div>
 
           {showDebug && (
-            <div className="card p-4 text-xs space-y-2">
-              <div className="font-medium">Debug</div>
-              <div>Signed in: <span className="font-mono">{isAuthed ? "yes" : "no"}</span></div>
-              <div>Email: <span className="font-mono">{userEmail ?? "—"}</span></div>
-              <div>Function URL present: <span className="font-mono">{funcUrl ? "yes" : "no"}</span></div>
-              <div>Function URL: <span className="font-mono break-all">{funcUrl || "—"}</span></div>
-              <div>Last HTTP status: <span className="font-mono">{lastStatus ?? "—"}</span></div>
-              <div>Last body:</div>
-              <pre className="bg-black/40 rounded p-2 overflow-x-auto whitespace-pre-wrap break-words">
-{lastBody ?? "—"}
-              </pre>
+            <div className="p-4 rounded-xl border">
+              <div className="text-sm font-semibold mb-2">Debug</div>
+              <div className="text-xs space-y-1">
+                <div>Signed in: {signedEmail ? "yes" : "no"}</div>
+                <div>Email: {signedEmail ?? "—"}</div>
+                <div>Function URL present: {envUrl ? "yes" : "no"}</div>
+                <div>Function URL: {envUrl ?? "—"}</div>
+                <div>Last HTTP status: {lastStatus ?? 0}</div>
+                <div className="mt-2">Raw JSON:</div>
+                <pre className="bg-slate-900 text-slate-100 p-2 rounded overflow-auto max-h-64">
+                  {JSON.stringify(result?.raw ?? {}, null, 2)}
+                </pre>
+              </div>
             </div>
           )}
-
-          <div className="text-xs text-white/40">
-            Tip: ensure good lighting and keep steady during burst capture.
-          </div>
         </div>
       </div>
     </div>
