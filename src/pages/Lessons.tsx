@@ -1,117 +1,80 @@
 import { useEffect, useState } from "react";
+import supabase from "@/lib/supabase";
 import { Link } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
-import { useToast } from "@/components/ToastProvider";
 
-type Row = {
+type Lesson = {
   id: string;
   title: string;
   description: string | null;
-  duration: number | null;
-  video_url: string | null;
-  video_path: string | null;
-  thumbnail_path: string | null;
-  created_at: string;
+  video_url: string | null;      // storage path
+  thumbnail_url: string | null;  // we'll stash steps.json path here
+  created_by: string;
   instruction_id: string | null;
+  created_at: string;
 };
 
 export default function Lessons() {
-  const { notify } = useToast();
-  const [rows, setRows] = useState<Row[]>([]);
+  const [items, setItems] = useState<Lesson[]>([]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    let mounted = true;
+    let on = true;
     (async () => {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      const q = supabase
+      setErr(null);
+      const { data, error } = await supabase
         .from("lessons")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-
-      const { data, error } = user ? await q.eq("created_by", user.id) : await q.eq("created_by", ""); // only show yours
-      if (!mounted) return;
-      if (error) {
-        console.error("[lessons] load error", error);
-        setRows([]);
-      } else {
-        setRows((data ?? []) as Row[]);
-      }
+        .select("id,title,description,video_url,thumbnail_url,created_by,instruction_id,created_at")
+        .order("created_at", { ascending: false });
+      if (!on) return;
+      if (error) setErr(error.message);
+      else setItems((data || []) as Lesson[]);
       setLoading(false);
     })();
-    return () => { mounted = false; };
+    return () => { on = false; };
   }, []);
 
-  async function open(row: Row) {
-    if (row.video_path) {
-      const { data, error } = await supabase.storage.from("lessons").createSignedUrl(row.video_path, 3600);
-      if (error || !data?.signedUrl) {
-        notify({ tone: "error", message: "Could not open video." });
-        return;
-      }
-      window.open(data.signedUrl, "_blank");
-    } else if (row.video_url) {
-      window.open(row.video_url, "_blank");
-    } else {
-      notify({ tone: "error", message: "No video available." });
-    }
+  async function openVideo(path: string | null) {
+    if (!path) return alert("No video.");
+    const { data, error } = await supabase.storage.from("lessons").createSignedUrl(path, 60 * 15);
+    if (error || !data?.signedUrl) return alert("Could not sign URL.");
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
-  async function remove(row: Row) {
+  async function removeLesson(id: string) {
     if (!confirm("Delete this lesson?")) return;
-    const { error } = await supabase.from("lessons").delete().eq("id", row.id);
-    if (error) return notify({ tone: "error", message: "Delete failed." });
-    setRows((xs) => xs.filter((x) => x.id !== row.id));
+    const { error } = await supabase.from("lessons").delete().eq("id", id);
+    if (error) return alert(error.message);
+    setItems((x) => x.filter((i) => i.id !== id));
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-5">
       <h1 className="text-2xl font-semibold">Lessons</h1>
-      {loading ? (
-        <div className="card p-4 text-white/60">Loading…</div>
-      ) : rows.length === 0 ? (
-        <div className="card p-4 text-white/60">No lessons yet.</div>
-      ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rows.map((r) => (
-            <div key={r.id} className="card p-3 grid gap-2">
-              <div className="aspect-video w-full rounded-lg bg-black overflow-hidden">
-                {r.thumbnail_path ? (
-                  <Thumb path={r.thumbnail_path} />
-                ) : (
-                  <div className="w-full h-full grid place-items-center text-white/40">No thumbnail</div>
-                )}
-              </div>
-              <div className="font-medium">{r.title}</div>
-              {r.description && <div className="text-white/70 text-sm line-clamp-2">{r.description}</div>}
-              <div className="text-white/60 text-xs">{r.duration ? `${r.duration}s` : ""}</div>
-              <div className="flex flex-wrap gap-2">
-                {r.instruction_id && (
-                  <Link to={`/student/guided/${r.instruction_id}`} className="btn btn-primary">Try This</Link>
-                )}
-                <button className="btn btn-outline" onClick={() => open(r)}>Open</button>
-                <button className="btn btn-danger" onClick={() => remove(r)}>Delete</button>
-              </div>
+      {loading && <div className="text-white/70">Loading…</div>}
+      {err && <div className="text-red-400">Error: {err}</div>}
+      {!loading && !items.length && <div className="card p-4">No lessons yet.</div>}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((l) => (
+          <div key={l.id} className="card p-4 space-y-2">
+            <div className="text-lg font-medium">{l.title}</div>
+            {l.description && <div className="text-sm text-white/70">{l.description}</div>}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button className="btn btn-outline" onClick={() => openVideo(l.video_url)}>
+                Open
+              </button>
+              <Link className="btn btn-primary" to={`/student/practice/${l.id}`}>
+                Try This
+              </Link>
+              <button className="btn btn-outline" onClick={() => removeLesson(l.id)}>
+                Delete
+              </button>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        ))}
+      </div>
     </div>
   );
-}
-
-function Thumb({ path }: { path: string }) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const { data } = await supabase.storage.from("lessons").createSignedUrl(path, 3600);
-      if (!mounted) return;
-      setUrl(data?.signedUrl ?? null);
-    })();
-    return () => { mounted = false; };
-  }, [path]);
-  return url ? <img src={url} className="w-full h-full object-cover" /> : <div className="w-full h-full bg-white/5" />;
 }
